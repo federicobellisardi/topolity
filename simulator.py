@@ -1,0 +1,190 @@
+#!/usr/bin/env python
+"""
+author: Federico Bellisardi
+"""
+
+import os
+import random
+import argparse
+import pandas as pd
+import geopandas as gpd
+import osmnx as ox
+import networkx as nx
+from shapely import wkt
+from shapely.geometry import Point
+from tqdm import tqdm
+from collections import defaultdict
+
+
+
+from utils import logger, read_conf, haversine
+from data_processing import process_dataset
+from od_generator import main as od_main
+
+
+class MovementSimulator:
+    def __init__(self, cost_matrix, dem_gdf, G, radius=50):
+        self.cost_matrix = cost_matrix
+        self.dem_gdf = dem_gdf
+        self.G = G
+        self.radius = radius    
+        self.cost_matrix.index = self.cost_matrix.index.astype(int)
+        self.cost_matrix.columns = self.cost_matrix.columns.astype(int)
+
+
+    def compute_edge_costs_from_path_cost_matrix(self):
+        edge_weights = defaultdict(float)
+
+        for origin in self.cost_matrix.index:
+            for dest in self.cost_matrix.columns:
+                if origin == dest:
+                    continue
+                try:
+                    path = nx.shortest_path(self.G, source=origin, target=dest, weight='length')
+                    total_cost = self.cost_matrix.loc[origin, dest]
+                    if len(path) < 2 or total_cost == 0:
+                        continue
+                    per_edge_cost = total_cost / (len(path) - 1)
+                    for u, v in zip(path[:-1], path[1:]):
+                        edge_weights[(u, v)] += per_edge_cost
+                except nx.NetworkXNoPath:
+                    continue
+
+        return edge_weights
+
+    def simulate_movements(self, save_path):
+        w1 = 1
+        w2 = 1
+        edge_weights = self.compute_edge_costs_from_path_cost_matrix()
+
+        def weighted_cost(u, v, d):
+            return edge_weights.get((u, v), 0)
+            
+        movements = []
+        for origin_node, row in tqdm(self.cost_matrix.iterrows(), total=len(self.cost_matrix), desc="Simulating movements", unit="node"):
+            for dest_node, _ in row.items():
+                on = int(origin_node)
+                dn = int(dest_node)
+                if on == dn: 
+                    continue
+                try:
+                    weight = lambda u, v, d: w1 * d.get('length', 0) + w2 * weighted_cost(u, v, d)
+                    # weight = "length"
+                    path_nodes = nx.shortest_path(self.G, source=on, target=dn, 
+                                                    weight=weight, method='dijkstra'
+                                                  )
+                except nx.NetworkXNoPath:
+                    path_nodes = [origin_node, dest_node]
+                
+                polyline = []
+                for u, v in zip(path_nodes[:-1], path_nodes[1:]):
+                    u_data = self.G.nodes[u]
+                    v_data = self.G.nodes[v]
+                    polyline.extend([(u_data['y'], u_data['x']), (v_data['y'], v_data['x'])])
+                
+                movements.append({
+                    'origin_node': origin_node,
+                    'destination_node': dest_node,
+                    'path': path_nodes,
+                    'polyline': polyline
+                })
+
+        movements_df = pd.DataFrame(movements)
+        logger.info(f"Simulated {len(movements_df)} movements.")
+
+        def get_altitude_for_point(lat, lon, dem_gdf):
+            pt = Point(lon, lat)
+            delta = self.radius / 111000.0 
+            bbox = (lon - delta, lat - delta, lon + delta, lat + delta)
+            candidate_indices = list(dem_gdf.sindex.intersection(bbox))
+            within_candidates = []
+            for idx in candidate_indices:
+                row = dem_gdf.iloc[idx]
+                d = haversine(lat, lon, row['lat'], row['lon'])
+                if d <= self.radius:
+                    within_candidates.append((d, row['alt']))
+            if within_candidates:
+                within_candidates.sort(key=lambda x: x[0])
+                return float(within_candidates[0][1])
+            else:
+                nearest_idx = list(dem_gdf.sindex.nearest(pt, 1))[0]
+
+                return float(dem_gdf.iloc[nearest_idx]['alt'].iloc[0])
+
+        enriched_polylines = []
+        for _, row in tqdm(movements_df.iterrows(), total=len(movements_df), desc="Enriching polylines with altitude"):
+            poly_entry = row['polyline']
+            enriched = []
+            for lat, lon in poly_entry:
+                alt = get_altitude_for_point(lat, lon, self.dem_gdf)
+                enriched.append((lat, lon, alt))
+            enriched_polylines.append(enriched)
+
+        movements_df['polyline_with_alt'] = enriched_polylines
+
+        return movements_df
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Simulate movement using different models."
+    )
+    parser.add_argument("-c", "--conf", required=True, help="Path to configuration JSON file")
+    args = parser.parse_args()
+
+    translation = False
+
+    conf = read_conf(args.conf)
+    data_src = conf.get("data_processing", {}).get("twitter", {})
+    if data_src:
+        dp_conf = conf.get("data_processing", {}).get("data_source", {}).get("twitter", {})
+    else:
+        dp_conf = conf.get("data_processing", {}).get("data_source", {}).get("worldpop", {})  # population file settings now reside here
+
+    dyn_conf = conf.get("dynamics", {})
+    tag = dp_conf.get("tag", "default")
+    radius = dyn_conf.get("search_radius", 50)
+
+    data_folder = os.path.join(os.environ.get("WORKSPACE", "."), "topolity", "data")
+    save_folder = os.path.join(os.environ.get("WORKSPACE", "."), "topolity", 'output', f"tag_{tag}")    
+    dem_data, G = od_main()
+
+    if not translation:
+        logger.info("Original demographic used.")
+        dem_data = dem_data
+        print(dem_data)
+    else:
+        logger.info("Translated demographic used.")
+        pass
+
+    cost_folder = os.path.join(os.environ.get("WORKSPACE", "."), "topolity", 'output', f"tag_{tag}", 'cost_matrices')
+
+    cost_files = [f for f in os.listdir(cost_folder) if f.endswith('.csv')]
+    cost_matrices = {}
+    for file in cost_files:
+        file_path = os.path.join(cost_folder, file)
+        df = pd.read_csv(file_path, index_col=[0], header=[0], sep=';')
+        cost_matrices[file] = df
+
+    for filename, df in cost_matrices.items():
+        model_type = filename.split('_')[1]
+        simulator = MovementSimulator(df, dem_data, G, radius=radius)
+        save_path = os.path.join(save_folder, "movements")
+        if not translation:
+            save_path = os.path.join(save_path, f"original")
+        else:
+            save_path = os.path.join(save_path, f"translated")
+        os.makedirs(save_path, exist_ok=True)
+
+        save_path = os.path.join(save_path, f"{model_type}")
+        if not os.path.exists(os.path.join(save_path)):
+            os.makedirs(os.path.join(save_path))
+        file_save = os.path.join(save_path, f"{tag}_{model_type}_movements.csv")
+
+        movements_df = simulator.simulate_movements(file_save)
+
+        movements_df.to_csv(file_save, index=False, sep=';')
+        logger.info(f"Simulated movements saved to {file_save}")
+
+
+if __name__ == "__main__":
+    main()
