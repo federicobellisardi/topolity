@@ -193,14 +193,14 @@ def main():
             movements=movements_df,
             od_matrix=od_matrix,
             G=G,
-            conf=conf,
+            conf=dp_conf,
             dem=demfile             
         )
         edge_work_df = work_obj.compute_edge_work(od_matrix, movements_df)
         plot_obj = WorkPlot(
             df=edge_work_df,
             G=G,
-            conf=conf,
+            conf=dp_conf,
             dem=demfile, 
             output=f"{save_path}/{tag}_{model_type}_work_heatmap.png"
         )
