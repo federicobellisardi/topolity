@@ -20,16 +20,18 @@ from collections import defaultdict
 from utils import logger, read_conf, haversine
 from data_processing import process_dataset
 from od_generator import main as od_main
+from work import Work, WorkPlot
+
 
 
 class MovementSimulator:
-    def __init__(self, cost_matrix, dem_gdf, G, radius=50):
-        self.cost_matrix = cost_matrix
+    def __init__(self, OD_matrix, dem_gdf, G, radius=50):
+        self.OD_matrix = OD_matrix
         self.dem_gdf = dem_gdf
         self.G = G
         self.radius = radius    
-        self.cost_matrix.index = self.cost_matrix.index.astype(int)
-        self.cost_matrix.columns = self.cost_matrix.columns.astype(int)
+        self.OD_matrix.index = self.OD_matrix.index.astype(int)
+        self.OD_matrix.columns = self.OD_matrix.columns.astype(int)
 
 
     def compute_edge_costs_from_path_cost_matrix(self):
@@ -54,22 +56,21 @@ class MovementSimulator:
 
     def simulate_movements(self, save_path):
         w1 = 1
-        w2 = 1
-        edge_weights = self.compute_edge_costs_from_path_cost_matrix()
+        w2 = 0
+        # edge_weights = self.compute_edge_costs_from_path_cost_matrix()
 
-        def weighted_cost(u, v, d):
-            return edge_weights.get((u, v), 0)
+        # def weighted_cost(u, v, d):
+        #     return edge_weights.get((u, v), 0)
             
         movements = []
-        for origin_node, row in tqdm(self.cost_matrix.iterrows(), total=len(self.cost_matrix), desc="Simulating movements", unit="node"):
+        for origin_node, row in tqdm(self.OD_matrix.iterrows(), total=len(self.OD_matrix), desc="Simulating movements", unit="node"):
             for dest_node, _ in row.items():
                 on = int(origin_node)
                 dn = int(dest_node)
                 if on == dn: 
                     continue
                 try:
-                    weight = lambda u, v, d: w1 * d.get('length', 0) + w2 * weighted_cost(u, v, d)
-                    # weight = "length"
+                    weight = lambda u, v, d: w1 * d.get('length', 0) #+ w2 * weighted_cost(u, v, d)
                     path_nodes = nx.shortest_path(self.G, source=on, target=dn, 
                                                     weight=weight, method='dijkstra'
                                                   )
@@ -144,28 +145,30 @@ def main():
     tag = dp_conf.get("tag", "default")
     radius = dyn_conf.get("search_radius", 50)
 
-    data_folder = os.path.join(os.environ.get("WORKSPACE", "."), "topolity", "data")
+    dem_foder = os.path.join(os.environ.get("WORKSPACE", "."), "topolity", "data", "dem")
+    demfile = os.path.join(dem_foder, f"{tag}_dem.tif")
+
     save_folder = os.path.join(os.environ.get("WORKSPACE", "."), "topolity", 'output', f"tag_{tag}")    
     dem_data, G = od_main()
 
     if not translation:
         logger.info("Original demographic used.")
         dem_data = dem_data
-        print(dem_data)
     else:
         logger.info("Translated demographic used.")
         pass
 
-    cost_folder = os.path.join(os.environ.get("WORKSPACE", "."), "topolity", 'output', f"tag_{tag}", 'cost_matrices')
+    # png_folder = os.path.join(os.environ.get("WORKSPACE", "."), "topolity", 'output', f"tag_{tag}", 'png')
+    OD_folder = os.path.join(os.environ.get("WORKSPACE", "."), "topolity", 'output', f"tag_{tag}", 'OD_matrices')
 
-    cost_files = [f for f in os.listdir(cost_folder) if f.endswith('.csv')]
-    cost_matrices = {}
-    for file in cost_files:
-        file_path = os.path.join(cost_folder, file)
+    OD_files = [f for f in os.listdir(OD_folder) if f.endswith('.csv')]
+    OD_matrices = {}
+    for file in OD_files:
+        file_path = os.path.join(OD_folder, file)
         df = pd.read_csv(file_path, index_col=[0], header=[0], sep=';')
-        cost_matrices[file] = df
+        OD_matrices[file] = df
 
-    for filename, df in cost_matrices.items():
+    for filename, df in OD_matrices.items():
         model_type = filename.split('_')[1]
         simulator = MovementSimulator(df, dem_data, G, radius=radius)
         save_path = os.path.join(save_folder, "movements")
@@ -184,6 +187,24 @@ def main():
 
         movements_df.to_csv(file_save, index=False, sep=';')
         logger.info(f"Simulated movements saved to {file_save}")
+
+        od_matrix = df
+        work_obj = Work(
+            movements=movements_df,
+            od_matrix=od_matrix,
+            G=G,
+            conf=conf,
+            dem=demfile             
+        )
+        edge_work_df = work_obj.compute_edge_work(od_matrix, movements_df)
+        plot_obj = WorkPlot(
+            df=edge_work_df,
+            G=G,
+            conf=conf,
+            dem=demfile, 
+            output=f"{save_path}/{tag}_{model_type}_work_heatmap.png"
+        )
+        plot_obj.heatmap(edge_work_df, tag)
 
 
 if __name__ == "__main__":

@@ -49,29 +49,6 @@ def polygon_to_wkt(geom):
     coord_strings = ", ".join(f"{pt[0]} {pt[1]}" for pt in coords)
     return f"POLYGON (({coord_strings}))"
 
-def integrator(h1, h2, dh):
-    """
-    Integrate height increments from h1 to h2 using a step of dh.
-    """
-    if h2 <= h1:
-        return 0.0
-    total = 0.0
-    h = h1
-    while h < h2:
-        step = dh if h + dh <= h2 else (h2 - h)
-        total += step
-        h += step
-    return total
-
-def gravitational_work(h1, h2, m, g, dh):
-    """
-    Calculate gravitational work required to raise mass m from height h1 to h2.
-    """
-    if h2 <= h1:
-        return 0.0
-    delta_h = integrator(h1, h2, dh)
-    return m * g * delta_h
-
 def friction_work(lat1, lon1, lat2, lon2, m, g, mu):
     """
     Calculate friction work along the horizontal distance between two geographic points.
