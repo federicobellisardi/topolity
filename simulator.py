@@ -4,21 +4,21 @@ author: Federico Bellisardi
 """
 
 import os
-import random
 import argparse
 import pandas as pd
 import geopandas as gpd
 import osmnx as ox
 import networkx as nx
 from shapely import wkt
-from shapely.geometry import Point
+from shapely.geometry import Point, box
 from tqdm import tqdm
 from collections import defaultdict
-
-
+import rasterio
+import requests
+from rasterio.mask import mask
 
 from utils import logger, read_conf, haversine
-from data_processing import process_dataset
+from data_processing import process_dataset, DEMReader
 from od_generator import main as od_main
 from work import Work, WorkPlot
 
@@ -132,33 +132,113 @@ def main():
     parser.add_argument("-c", "--conf", required=True, help="Path to configuration JSON file")
     args = parser.parse_args()
 
-    translation = False
 
     conf = read_conf(args.conf)
+    dp_conf = conf.get("data_processing", {})
     data_src = conf.get("data_processing", {}).get("twitter", {})
     if data_src:
-        dp_conf = conf.get("data_processing", {}).get("data_source", {}).get("twitter", {})
+        ds_conf = conf.get("data_processing", {}).get("data_source", {}).get("twitter", {})
     else:
-        dp_conf = conf.get("data_processing", {}).get("data_source", {}).get("worldpop", {})  # population file settings now reside here
+        ds_conf = conf.get("data_processing", {}).get("data_source", {}).get("worldpop", {})  # population file settings now reside here
 
     dyn_conf = conf.get("dynamics", {})
     tag = dp_conf.get("tag", "default")
     radius = dyn_conf.get("search_radius", 50)
 
+    translation = dyn_conf.get("translation_dem", False)
+    api_key = dp_conf.get("altitude", {}).get("api_key",{})
+
     dem_foder = os.path.join(os.environ.get("WORKSPACE", "."), "topolity", "data", "dem")
     demfile = os.path.join(dem_foder, f"{tag}_dem.tif")
 
     save_folder = os.path.join(os.environ.get("WORKSPACE", "."), "topolity", 'output', f"tag_{tag}")    
-    dem_data, G = od_main()
+    _, G = od_main()
 
     if not translation:
         logger.info("Original demographic used.")
-        dem_data = dem_data
+        bbox_dic = dp_conf.get("bbox", {}).get(tag, {})
+
+        if not bbox_dic:
+            raise ValueError("Bounding box info missing in config.")
+        bbox = (
+            bbox_dic["min_lon"],
+            bbox_dic["min_lat"],
+            bbox_dic["max_lon"],
+            bbox_dic["max_lat"]
+        )
+        bbox_geom = [box(*bbox)]
+        
+        with rasterio.open(demfile) as dem:
+            if dem.crs.to_string() != "EPSG:4326":
+                from rasterio.warp import transform_bounds
+                bbox = transform_bounds("EPSG:4326", dem.crs, *bbox)
+                bbox_geom = [box(*bbox)]
+            dem_data, dem_transform = mask(dem, bbox_geom, crop=True)
+            dem_data = dem_data[0]
+        dem_file = demfile
     else:
         logger.info("Translated demographic used.")
-        pass
-
-    # png_folder = os.path.join(os.environ.get("WORKSPACE", "."), "topolity", 'output', f"tag_{tag}", 'png')
+        translation_direction = conf.get("translation_direction", "north")  # e.g., "north", "south", "east", "west"
+        translation_offset = conf.get("translation_offset", 0.1)  # offset in degrees (adjust as needed)
+        
+        bbox_dic = dp_conf.get("bbox", {}).get(tag, {})
+        if not bbox_dic:
+            raise ValueError("Bounding box info missing in config.")
+        min_lon = bbox_dic["min_lon"]
+        min_lat = bbox_dic["min_lat"]
+        max_lon = bbox_dic["max_lon"]
+        max_lat = bbox_dic["max_lat"]
+        
+        if translation_direction.lower() == "north":
+            new_bbox = (min_lon, min_lat + translation_offset, max_lon, max_lat + translation_offset)
+        elif translation_direction.lower() == "south":
+            new_bbox = (min_lon, min_lat - translation_offset, max_lon, max_lat - translation_offset)
+        elif translation_direction.lower() == "east":
+            new_bbox = (min_lon + translation_offset, min_lat, max_lon + translation_offset, max_lat)
+        elif translation_direction.lower() == "west":
+            new_bbox = (min_lon - translation_offset, min_lat, max_lon - translation_offset, max_lat)
+        else:
+            raise ValueError("Invalid translation direction specified in config.")
+        
+        new_min_lon, new_min_lat, new_max_lon, new_max_lat = new_bbox
+        width = new_max_lon - new_min_lon
+        height = new_max_lat - new_min_lat
+        expanded_min_lon = new_min_lon - width
+        expanded_min_lat = new_min_lat - height
+        expanded_max_lon = new_max_lon + width
+        expanded_max_lat = new_max_lat + height
+        
+        if not api_key:
+            raise ValueError("API key for DEM download missing in config.")
+        
+        url = (
+            f"https://portal.opentopography.org/API/globaldem?demtype=SRTMGL3&"
+            f"south={expanded_min_lat}&north={expanded_max_lat}&west={expanded_min_lon}&east={expanded_max_lon}&"
+            f"outputFormat=GTiff&API_Key={api_key}"
+        )
+        logger.info("Downloading translated DEM from: " + url)
+        response = requests.get(url)
+        if response.status_code == 200:
+            translated_dem_file = f"{dem_foder}/{tag}_translated_dem.tif"
+            with open(translated_dem_file, "wb") as f:
+                f.write(response.content)
+            logger.info("Translated DEM downloaded and saved as " + translated_dem_file)
+        else:
+            raise Exception("Failed to download translated DEM: " + str(response.json()))
+        
+        bbox_geom = [box(*new_bbox)]
+        with rasterio.open(translated_dem_file) as dem:
+            if dem.crs.to_string() != "EPSG:4326":
+                from rasterio.warp import transform_bounds
+                new_bbox_transformed = transform_bounds("EPSG:4326", dem.crs, *new_bbox)
+                bbox_geom = [box(*new_bbox_transformed)]
+            dem_data, dem_transform = mask(dem, bbox_geom, crop=True)
+            dem_data = dem_data[0]
+        
+        dem_file = translated_dem_file
+    
+    dem_reader = DEMReader(dem_file, search_radius=50)
+    dem_gdf = dem_reader.get_pixel_centroids()
     OD_folder = os.path.join(os.environ.get("WORKSPACE", "."), "topolity", 'output', f"tag_{tag}", 'OD_matrices')
 
     OD_files = [f for f in os.listdir(OD_folder) if f.endswith('.csv')]
@@ -170,7 +250,7 @@ def main():
 
     for filename, df in OD_matrices.items():
         model_type = filename.split('_')[1]
-        simulator = MovementSimulator(df, dem_data, G, radius=radius)
+        simulator = MovementSimulator(df, dem_gdf, G, radius=radius)
         save_path = os.path.join(save_folder, "movements")
         if not translation:
             save_path = os.path.join(save_path, f"original")
@@ -194,14 +274,14 @@ def main():
             od_matrix=od_matrix,
             G=G,
             conf=dp_conf,
-            dem=demfile             
+            dem=dem_file             
         )
         edge_work_df = work_obj.compute_edge_work(od_matrix, movements_df)
         plot_obj = WorkPlot(
             df=edge_work_df,
             G=G,
             conf=dp_conf,
-            dem=demfile, 
+            dem=dem_file, 
             output=f"{save_path}/{tag}_{model_type}_work_heatmap.png"
         )
         plot_obj.heatmap(edge_work_df, tag)

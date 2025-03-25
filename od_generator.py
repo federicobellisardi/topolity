@@ -107,16 +107,21 @@ def main():
     parser.add_argument("-c", "--conf", required=True, help="Path to configuration JSON file")
     args = parser.parse_args()
 
-    test = True
-
     conf = read_conf(args.conf)
-    data_src = conf.get("data_processing", {}).get("twitter", {})
+    utils_conf = conf.get("utils", {})
+    dp_conf = conf.get("data_processing", {})
+
+    test_mode = utils_conf.get("test_mode", False)
+    if test_mode:
+        logger.warning("Test mode is enabled.")
+
+    data_src = dp_conf.get("twitter", {})
     if data_src:
         logger.info("Using Twitter data source.")
-        dp_conf = conf.get("data_processing", {}).get("data_source", {}).get("twitter", {})
+        ds_conf = dp_conf.get("data_source", {}).get("twitter", {})
     else:
         logger.info("Using Worldpop data source.")
-        dp_conf = conf.get("data_processing", {}).get("data_source", {}).get("worldpop", {})  # population file settings now reside here
+        ds_conf = dp_conf.get("data_source", {}).get("worldpop", {})
 
     dyn_conf = conf.get("dynamics", {})
     tag = dp_conf.get("tag", "default")
@@ -131,7 +136,7 @@ def main():
     pop_df['geometry'] = pop_df['geometry'].apply(wkt.loads)
     pop_gdf = gpd.GeoDataFrame(pop_df, geometry='geometry', crs="EPSG:4326")
 
-    if test:
+    if test_mode:
         pop_gdf = pop_gdf.sample(150)
 
     gb = GraphBuilder(data_folder, pop_gdf, dyn_conf)
@@ -195,12 +200,6 @@ def main():
     logger.info(f"Logit cost matrix computed and saved in {l_path_cost}.")
     
     return dem_data, G
-
-    # movements_file = os.path.join(save_folder, f"{tag}_movements.csv")
-    # simulator = MovementSimulator(points_gdf, agents_with_cell, grid_nonzero, grav_norm, G)
-    # movements = simulator.simulate_movements(movements_file, dem_data)
-    # movements.to_csv(movements_file, index=False, sep=';')
-    # logger.info("Simulation completed.")
 
 if __name__ == "__main__":
     main()

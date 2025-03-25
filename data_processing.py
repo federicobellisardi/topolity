@@ -3,8 +3,6 @@ author: Federico Bellisardi
 """
 
 import argparse
-import ast
-import logging
 import os
 import csv
 import pandas as pd
@@ -16,13 +14,9 @@ from rasterio.mask import mask
 from tqdm import tqdm
 
 from shapely.geometry import Point, box
-from utils import logger, read_conf, haversine, polygon_to_wkt
+from utils import logger, read_conf, polygon_to_wkt
 
 class PopulationReader:
-    """
-    Class to read and enrich a population (or movement) file.
-    Assumes the file is a CSV with a geometry column and optionally a "polyline" column.
-    """
     def __init__(self, input_file, bbox_config, tag, output_folder, search_radius=50):
         self.input_file = input_file
         self.output_folder = output_folder
@@ -46,7 +40,7 @@ class PopulationReader:
         features = list(rasterio.features.shapes(band.data, mask=~band.mask, transform=transform))
         logger.info(f"Total features found: {len(features)}")
         idx = 0
-        for geom, val in tqdm(features, desc="Processing features", unit="feature"):
+        for geom, val in tqdm(features, desc="Processing population", unit="feature"):
             geom_transformed = rasterio.warp.transform_geom(dataset.crs, 'EPSG:4326', geom, precision=6)
             if val != 0:
                 try:
@@ -56,7 +50,6 @@ class PopulationReader:
                     continue
                 csv_writer.writerow([idx, idx, round(val), wkt_polygon])
                 idx += 1
-        logger.info(f"Processed {idx} valid features.")
 
     def read_population(self):
         with rasterio.open(self.input_file) as dataset:
@@ -73,10 +66,6 @@ class PopulationReader:
 # class TwitterOD:
 
 class DEMReader:
-    """
-    Class to read a DEM (Digital Elevation Model) file.
-    Provides a method to extract pixel centroids and their corresponding altitudes.
-    """
     def __init__(self, dem_file, search_radius=50):
         self.dem_file = dem_file
         self.search_radius = search_radius
@@ -103,18 +92,13 @@ class DEMReader:
         if response.status_code == 200:
             with open(dem_file, 'wb') as f:
                 f.write(response.content)
-            logging.info(f"DEM downloaded and saved as {dem_file}")
+            logger.info(f"DEM downloaded and saved as {dem_file}")
             return dem_file
         else:
-            logging.error(f"Error fetching DEM: {response.json()}")
+            logger.error(f"Error fetching DEM: {response.json()}")
             raise Exception("Failed to download DEM")
 
     def get_pixel_centroids(self, bbox=None):
-        """
-        For each pixel in the DEM, compute the centroid's geographic coordinates (lat, lon)
-        and its altitude. Optionally, restrict to a bounding box.
-        Returns a GeoDataFrame with columns: 'lat', 'lon', 'alt', and 'geometry'.
-        """
         logger.info(f"Reading DEM from {self.dem_file}")
         centroids = []
         lats = []
@@ -142,20 +126,19 @@ class DEMReader:
                     centroids.append(Point(lon, lat))
         gdf = gpd.GeoDataFrame({'lat': lats, 'lon': lons, 'alt': alts, 'geometry': centroids})
         gdf.crs = src.crs
-        self.dem_data = gdf
         logger.info("DEM pixel centroids extracted successfully.")
         return gdf
 
 def process_dataset(conf):
-    """
-    Main function to process the dataset using the configuration settings.
-    Reads the population file and DEM file, enriches the population data if applicable,
-    and saves the processed data to an output CSV file.
-    """
-    dp_conf = conf.get("data_processing", {}).get("data_source", {}).get("worldpop", {})
+    dp_conf = conf.get("data_processing", {})
+    wp_conf = conf.get("data_processing", {}).get("data_source", {}).get("worldpop", {})
+    al_conf = conf.get("data_processing", {}).get("altitude", {})
     tag = dp_conf.get("tag", {})
-    input_file = dp_conf.get("input_file")
+    input_file = wp_conf.get("input_file")
     input_file = os.path.join(os.environ['WORKSPACE'], 'data', f'{input_file}')
+    dem_path = os.path.join(os.environ['WORKSPACE'], 'data', 'dem')
+    if not os.path.exists(dem_path):
+        os.makedirs(dem_path)
     dem_file = os.path.join(os.environ['WORKSPACE'], 'data', 'dem', f'{tag}_dem.tif')
 
     bbox_config = dp_conf.get("bbox", {})
@@ -176,13 +159,13 @@ def process_dataset(conf):
 
     dem_reader = DEMReader(dem_file, search_radius=search_radius)
     if not os.path.exists(dem_file):
-        dem_download = dem_reader.download_dem(dp_conf.get("altitude").get("api_key"), selected_bbox, dem_file)
+        dem_download = dem_reader.download_dem(al_conf.get("api_key"), selected_bbox, dem_file)
     else:
         logger.info(f"Using existing DEM file: {dem_file}")
 
-    dem_data = dem_reader.get_pixel_centroids()
+    dem_gdf = dem_reader.get_pixel_centroids()
 
-    return pop_data, dem_data
+    return pop_data, dem_gdf
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
