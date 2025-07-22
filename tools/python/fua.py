@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 class FUAMapGenerator:
     
     def __init__(self, gpkg_file: str, output_dir: str = "./output_maps"):
+        plt.rcParams.update({'font.size': 18})
         self.gpkg_file = gpkg_file
         self.output_dir = output_dir
         self.gdf = None
@@ -198,9 +199,9 @@ class FUAMapGenerator:
         ax.set_yticks(yticks)
         ax.set_yticklabels([f"{transformer.transform(minx, y)[1]:.3f}°" for y in yticks])
         
-        ax.set_xlabel('Longitude', fontsize=12)
-        ax.set_ylabel('Latitude', fontsize=12)
-        ax.set_title(f'Bounding Box of {city_name}', fontsize=14, fontweight='bold')
+        ax.set_xlabel('Longitude')
+        ax.set_ylabel('Latitude')
+        # ax.set_title(f'Bounding Box of {city_name}', fontsize=14, fontweight='bold')
         
         ax.grid(True, alpha=0.3)
     
@@ -224,7 +225,7 @@ class FUAMapGenerator:
         selected_city_name = row['eFUA_name']
         logger.info(f"Row found for {selected_city_name}")
         logger.debug(f"Geometry type: {type(row.geometry)}")
-        
+       
         minx, miny, maxx, maxy = self.convert_to_wgs84(row)
         
         png_file = self.generate_map(selected_city_name, south=miny, north=maxy, 
