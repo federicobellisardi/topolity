@@ -1,7 +1,7 @@
 """
 author: Federico Bellisardi
+execution: runlog -t 96:00 -m 128 -c 8 -j bar python dem_extractor.py --city barcelone
 """
-
 import os
 import argparse
 import pickle
@@ -15,10 +15,15 @@ from shapely.ops import unary_union, transform
 from math import cos, sin, pi
 import json
 import multiprocessing as mp
+import numpy as np
+from scipy.spatial import cKDTree
 
 import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use("Agg")
+import contextily as ctx
+plt.rcParams.update({'font.size': 22})
+
 from shapely.wkt import loads as load_wkt
 from data_processing import DEMReader
 from utils import logger
@@ -26,7 +31,10 @@ from utils import logger
 import folium
 from folium import FeatureGroup
 import matplotlib.colors as mcolors
+import time
 
+# global total variants count for logging
+VARIANT_COUNT = 0
 
 def is_dem_complete(path):
     """Check if the DEM file exists and is larger than 1MB."""
@@ -72,8 +80,7 @@ def assign_altitudes(G, dem_reader):
     """
     dem_gdf = dem_reader.get_pixel_centroids()
     # build KDTree on DEM pixel centroids
-    import numpy as np
-    from scipy.spatial import cKDTree
+
     dem_coords = np.vstack((dem_gdf.geometry.y.values, dem_gdf.geometry.x.values)).T
     dem_alts = dem_gdf['alt'].values
     tree = cKDTree(dem_coords)
@@ -109,49 +116,53 @@ def compute_graph_statistics(G):
     }
 
 def translate_graph(G, offset):
-    """Apply a translation to graph node coordinates."""
-    for _, data in G.nodes(data=True):
-        data['x'] += offset[0]
-        data['y'] += offset[1]
+    nodes, data = zip(*G.nodes(data=True))
+    xs = np.fromiter((d['x'] for d in data), float)
+    ys = np.fromiter((d['y'] for d in data), float)
+    xs += offset[0]
+    ys += offset[1]
+    attr = {n:{'x': x, 'y': y} for n, x, y in zip(nodes, xs, ys)}
+    nx.set_node_attributes(G, attr)
     return G
 
 def rotate_graph(G, angle_deg, origin=None):
-    """Apply a rotation to graph node coordinates."""
-    xs = [data['x'] for _,data in G.nodes(data=True)]
-    ys = [data['y'] for _,data in G.nodes(data=True)]
+    nodes, data = zip(*G.nodes(data=True))
+    xs = np.fromiter((d['x'] for d in data), float)
+    ys = np.fromiter((d['y'] for d in data), float)
     if origin is None:
-        x0, y0 = (max(xs)+min(xs))/2, (max(ys)+min(ys))/2
+        x0, y0 = (xs.max()+xs.min())/2, (ys.max()+ys.min())/2
     else:
         x0, y0 = origin
-
-    theta = angle_deg * pi / 180.0
-    c, s = cos(theta), sin(theta)
-    for _, data in G.nodes(data=True):
-        dx, dy = data['x'] - x0, data['y'] - y0
-        xr =  c*dx - s*dy + x0
-        yr =  s*dx + c*dy + y0
-        data['x'], data['y'] = xr, yr
+    theta = angle_deg * np.pi / 180.0
+    c, s = np.cos(theta), np.sin(theta)
+    dx = xs - x0
+    dy = ys - y0
+    xr =  c*dx - s*dy + x0
+    yr =  s*dx + c*dy + y0
+    attr = {n:{'x': x, 'y': y} for n, x, y in zip(nodes, xr, yr)}
+    nx.set_node_attributes(G, attr)
     return G
 
-def scale_graph(G, scale_factor, origin=None):
-    """Apply a scaling transformation to graph node coordinates."""
-    xs = [data['x'] for _,data in G.nodes(data=True)]
-    ys = [data['y'] for _,data in G.nodes(data=True)]
+def scale_graph(G, scale_factor, axis='both', origin=None):
+    nodes, data = zip(*G.nodes(data=True))
+    xs = np.fromiter((d['x'] for d in data), float)
+    ys = np.fromiter((d['y'] for d in data), float)
     if origin is None:
-        x0, y0 = (max(xs)+min(xs))/2, (max(ys)+min(ys))/2
+        x0, y0 = (xs.max()+xs.min())/2, (ys.max()+ys.min())/2
     else:
         x0, y0 = origin
-
-    for _, data in G.nodes(data=True):
-        data['x'] = x0 + scale_factor * (data['x'] - x0)
-        # data['y'] = y0 + scale_factor * (data['y'] - y0)
+    xr = xs.copy()
+    yr = ys.copy()
+    if axis in ('x','both'):
+        xr = x0 + scale_factor * (xs - x0)
+    if axis in ('y','both'):
+        yr = y0 + scale_factor * (ys - y0)
+    attr = {n:{'x': x, 'y': y} for n, x, y in zip(nodes, xr, yr)}
+    nx.set_node_attributes(G, attr)
     return G
 
 def process_folder(folder, base_path, offsets, rotations, scales, cmap, api_key):
-    """
-    Process a single city folder: skip if everything is already done,
-    otherwise only run the steps whose outputs are missing.
-    """
+    logger.info(f"[{folder}] Starting processing folder")
     folder_path = os.path.join(base_path, folder)
     csv_file    = os.path.join(folder_path, 'data_useful.csv')
     if not os.path.exists(csv_file):
@@ -163,23 +174,22 @@ def process_folder(folder, base_path, offsets, rotations, scales, cmap, api_key)
 
     json_bbox = "/data/workspaces/fbellisardi/metropolis.json"
 
-    # define all the “final” outputs we expect:
     dem_dir     = os.path.join(folder_path, 'dem')
     dem_file    = os.path.join(dem_dir, f"{folder}_dem.tif")
     stats_file  = os.path.join(graphs_dir, 'graph_stats.csv')
-    map_file = os.path.join(graphs_dir, 'graph_variants_map.html')
-    expected_pickles  = (
-    ['graph_original.pkl'] +
-    [f'graph_translated_{i}.pkl'  for i in range(1, len(offsets))] +
-    [f'graph_rot_{a}.pkl'         for a in rotations] +
-    [f'graph_scale_{s}.pkl'       for s in scales]
+    expected_pickles = (
+        ['graph_original.pkl']
+        + [f'graph_translated_{i}.pkl' for i in range(1, len(offsets))]
+        + [f'graph_rot_{a}.pkl'        for a in rotations]
+        + [f'graph_scale_x_{s}.pkl'    for s in scales]
+        + [f'graph_scale_y_{s}.pkl'    for s in scales]
     )
-    pickle_files = [os.path.join(graphs_dir, fn) for fn in expected_pickles ]
+    pickle_files = [os.path.join(graphs_dir, fn) for fn in expected_pickles]
+
 
     all_done = (
         is_dem_complete(dem_file)
         and os.path.exists(stats_file)
-        and os.path.exists(map_file)
         and all(os.path.exists(p) for p in pickle_files)
     )
     if all_done:
@@ -189,6 +199,7 @@ def process_folder(folder, base_path, offsets, rotations, scales, cmap, api_key)
     df = pd.read_csv(csv_file, sep=';').dropna(subset=['geometry'])
     df['geometry'] = df['geometry'].apply(load_wkt)
     gdf = gpd.GeoDataFrame(df, geometry='geometry', crs='EPSG:4326')
+    logger.info(f"[{folder}] Loaded CSV and created GeoDataFrame with {len(gdf)} records")
 
     minx, miny, maxx, maxy = gdf.total_bounds
     center_y = (miny + maxy) / 2
@@ -208,8 +219,10 @@ def process_folder(folder, base_path, offsets, rotations, scales, cmap, api_key)
         download_dem(dem_file, ext_bounds, api_key)
 
     dem_reader = DEMReader(dem_file)
+    logger.info(f"[{folder}] DEMReader initialized for {dem_file}")
 
     city_poly = load_metropolis_bbox(json_bbox, folder)
+    logger.info(f"[{folder}] City polygon loaded with bounds {city_poly.bounds}")
 
     folium_map = folium.Map(location=[center_y, center_x], zoom_start=13)
 
@@ -265,13 +278,21 @@ def process_folder(folder, base_path, offsets, rotations, scales, cmap, api_key)
         else:
             logger.info(f"[{folder}] Original graph already has altitudes assigned, skipping.")
     else:
+        tol = 25  # tolerance for OSMnx intersection simplification
+        logger.info(f"[{folder}] Building original graph from polygon with tolerance {tol} m...")
         G = ox.graph_from_polygon(
             polygon,
+            # custom_filter='["highway"~"motorway|trunk|primary|secondary"]',
             network_type='drive',
             retain_all=True,
-            simplify=True
+            simplify=False,
+            truncate_by_edge=True
         )
+        G = ox.project_graph(G, to_crs='EPSG:3857')
+        G = ox.consolidate_intersections(G, tolerance=tol, rebuild_graph=True, dead_ends=False)
+        G = ox.simplify_graph(G)
         G = ox.project_graph(G, to_crs='EPSG:4326')
+
         if not nx.is_strongly_connected(G):
             cc = max(nx.strongly_connected_components(G), key=len)
             G = G.subgraph(cc).copy()
@@ -279,14 +300,50 @@ def process_folder(folder, base_path, offsets, rotations, scales, cmap, api_key)
         missing = assign_altitudes(G, dem_reader)
         logger.info(f"[{folder}] Assigned altitudes to original graph, missing: {missing}")
 
+        num_nodes = G.number_of_nodes()
+        num_edges = G.number_of_edges()
+        avg_degree = sum(dict(G.degree()).values()) / num_nodes if num_nodes else 0
+        density = nx.density(G)
+        logger.info(f"[{folder}] Graph stats: nodes={num_nodes}, edges={num_edges}, "
+                    f"avg_degree={avg_degree:.2f}, density={density:.2e}")
+
+        logger.info(f"[{folder}] Dijkstra complexity ≈ O(E log V) = O({num_edges} log {num_nodes}).")        
+
+        info_file = os.path.join(graphs_dir, 'original_graph_info.txt')
+        with open(info_file, 'w') as fout:
+            fout.write(f"num_nodes;{num_nodes}\n")
+            fout.write(f"num_edges;{num_edges}\n")
+            fout.write(f'tolerance;{tol} m\n')
+            fout.write(f"avg_degree;{avg_degree:.2f}\n")
+            fout.write(f"density;{density:.2e} [E / [N*(N - 1)]]\n")
+
+            fout.write(f"dijkstra_complexity;O({num_edges} log {num_nodes})\n")
+        logger.info(f"[{folder}] Saved graph info to {info_file}")
+
         with open(graph_original_pkl, 'wb') as f:
             pickle.dump(G, f)
         logger.info(f"[{folder}] Built & saved original graph from polygon.")
 
+        gdf_edges = ox.graph_to_gdfs(G, nodes=False, edges=True)
+        gdf_edges_4326 = gdf_edges.to_crs(epsg=4326)
+        fig, ax = plt.subplots(figsize=(12, 10))
+        gdf_edges_4326.plot(ax=ax, linewidth=1, edgecolor='blue')
+        ctx.add_basemap(ax,
+                        crs='EPSG:4326',
+                        source=ctx.providers.OpenStreetMap.Mapnik)
+        ax.set_xlabel('Longitude')
+        ax.set_ylabel('Latitude')
+        minx, miny, maxx, maxy = gdf_edges_4326.total_bounds
+        ax.set_xlim(minx, maxx)
+        ax.set_ylim(miny, maxy)
+        png_path = os.path.join(graphs_dir, f'graph_map.png')
+        plt.savefig(png_path, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        logger.info(f"[{folder}] Saved static graph map to {png_path}")
+    
     stats_records = []
     folium_map = folium.Map(location=[center_y, center_x], zoom_start=13)
 
-    # define variants with picklable metadata only (no lambdas)
     variants = []
     for idx, off in enumerate(offsets):
         name = 'original' if idx == 0 else f'translated_{idx}'
@@ -301,29 +358,39 @@ def process_folder(folder, base_path, offsets, rotations, scales, cmap, api_key)
                          'type': 'rotate',
                          'angle_deg': angle})
     for scale in scales:
-        name = f'scale_{scale}'
-        variants.append({'variant': name,
+        variants.append({'variant': f'scale_x_{scale}',
                          'type': 'scale',
-                         'scale_factor': scale})
+                         'scale_factor': scale,
+                         'axis': 'x'})
+        variants.append({'variant': f'scale_y_{scale}',
+                         'type': 'scale',
+                         'scale_factor': scale,
+                         'axis': 'y'})
 
-    # Process each variant in parallel with only primitive args
     args_list = []
     for idx, meta in enumerate(variants):
         args_list.append(
             (G, dem_file, graphs_dir, center_y, center_x,
              land_mask, meta, idx, cmap)
         )
-    # usa tutti i core disponibili
+    # set total number of variants for logging
+    global VARIANT_COUNT
+    VARIANT_COUNT = len(args_list)
+    total_start = time.time()
+    logger.info(f"[{folder}] Starting variant processing on {mp.cpu_count()} cores")
     with mp.Pool(processes=mp.cpu_count()) as pool:
         results = pool.map(process_variant, args_list)
-    # raccogli statistica
+    total_end = time.time()
+    logger.info(f"[{folder}] Completed all variants in {total_end - total_start:.2f} seconds")
     for stats in results:
         if stats is not None:
             stats_records.append(stats)
 
-    fieldnames = ['variant','offset_x','offset_y','angle_deg','scale_factor','num_nodes','num_edges','z_mean','z_min','z_max','edge_len_mean','missing_altitude']
-
-    # Write out statistics CSV
+    fieldnames = [
+        'variant','offset_x','offset_y','angle_deg',
+        'scale_factor','axis',
+        'num_nodes','num_edges','z_mean','z_min','z_max','edge_len_mean','missing_altitude'
+    ]
     if stats_records:
         write_header = not os.path.exists(stats_file)
         with open(stats_file, 'a', newline='') as f:
@@ -333,53 +400,52 @@ def process_folder(folder, base_path, offsets, rotations, scales, cmap, api_key)
                 writer.writeheader()
             writer.writerows(stats_records)
         logger.info(f"[{folder}] Exported stats to {stats_file}")
+    logger.info(f"[{folder}] Finished processing folder")
 
 def process_variant(args):
-    """
-    Worker function per processare una singola variante.
-    Restituisce un dict con le statistiche o None se variante saltata.
-    """
-    # Unpack arguments: G graph, DEM file path, graphs directory, map center, land mask, metadata, color index, cmap
     (G, dem_file, graphs_dir, center_y, center_x,
      land_mask, meta, idx, cmap) = args
-    # Recreate DEMReader in worker
     from data_processing import DEMReader
+    variant_start = time.time()
+    pid = os.getpid()
+    try:
+        core = os.sched_getcpu()
+    except AttributeError:
+        core = 'N/A'
     dem_reader = DEMReader(dem_file)
     variant = meta['variant']
-    import pickle, os, folium, matplotlib.colors as mcolors
-    from shapely.geometry import Point
+    logger.info(f"Processing variant: {variant} ({idx+1}/{VARIANT_COUNT}) in process {pid} on core {core}")
+    import pickle, folium, matplotlib.colors as mcolors
 
     pkl_path = os.path.join(graphs_dir, f'graph_{variant}.pkl')
-    # carica o crea grafo
     if os.path.exists(pkl_path):
         with open(pkl_path, 'rb') as f:
             G_var = pickle.load(f)
     else:
-        # apply transformation based on meta type
         if meta['type'] == 'translate':
             G_var = translate_graph(G.copy(), meta['offset'])
         elif meta['type'] == 'rotate':
             G_var = rotate_graph(G.copy(), meta['angle_deg'])
         elif meta['type'] == 'scale':
-            G_var = scale_graph(G.copy(), meta['scale_factor'])
+            G_var = scale_graph(
+                G.copy(),
+                meta['scale_factor'],
+                axis=meta.get('axis','both')
+            )
         else:
             G_var = G.copy()
-        # verifica drift
         if any(not Point(d['x'], d['y']).within(land_mask) for _, d in G_var.nodes(data=True)):
+            logger.warning(f"Variant {variant} has nodes outside the land mask, skipping.")
             return None
-        # assegna altitudini e lunghezze
         missing = assign_altitudes(G_var, dem_reader)
         for u, v, d in G_var.edges(data=True):
             d.setdefault('length', d.get('length', 1))
         with open(pkl_path, 'wb') as f:
             pickle.dump(G_var, f)
-    # statistiche
     stats = compute_graph_statistics(G_var)
     stats['variant'] = variant
-    # include numeric parameters
     stats.update({k: v for k, v in meta.items() if k not in ['variant', 'type', 'offset']})
     stats['missing_altitude'] = sum(1 for _,d in G_var.nodes(data=True) if d.get('z',0)==0)
-    # salva mappa
     variant_map = folium.Map(location=[center_y, center_x], zoom_start=13)
     color = mcolors.to_hex(cmap(idx))
     for u,v in G_var.edges():
@@ -388,6 +454,8 @@ def process_variant(args):
         folium.PolyLine([(y1,x1),(y2,x2)], color=color, weight=2).add_to(variant_map)
     variant_map_file = os.path.join(graphs_dir, f'graph_{variant}_map.html')
     variant_map.save(variant_map_file)
+    variant_end = time.time()
+    logger.info(f"Variant {variant} completed in {variant_end - variant_start:.2f} seconds")
     return stats
 
 def main(api_key=None, example_city=None):
