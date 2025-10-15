@@ -87,7 +87,8 @@ class DEMReader:
             f"south={expanded_min_lat}&north={expanded_max_lat}&west={expanded_min_lon}&east={expanded_max_lon}&"
             f"outputFormat=GTiff&API_Key={api_key}"
         )
-
+        
+        logger.info(f"Requesting DEM from URL: {url.replace(api_key, 'HIDDEN')}")
         response = requests.get(url)
         if response.status_code == 200:
             with open(dem_file, 'wb') as f:
@@ -95,8 +96,12 @@ class DEMReader:
             logger.info(f"DEM downloaded and saved as {dem_file}")
             return dem_file
         else:
-            logger.error(f"Error fetching DEM: {response.json()}")
-            raise Exception("Failed to download DEM")
+            try:
+                error_details = response.json()
+                logger.error(f"Error fetching DEM (status {response.status_code}): {error_details}")
+            except (ValueError, requests.exceptions.JSONDecodeError):
+                logger.error(f"Error fetching DEM (status {response.status_code}): {response.text[:500]}")
+            raise Exception(f"Failed to download DEM - HTTP {response.status_code}")
 
     def get_pixel_centroids(self, bbox=None):
         logger.info(f"Reading DEM from {self.dem_file}")

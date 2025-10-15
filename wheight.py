@@ -28,9 +28,7 @@ from pyproj import Transformer
 from shapely.geometry import box, LineString, Point, Polygon
 
 import folium
-import matplotlib.pyplot as plt
 import branca.colormap as bcm
-import matplotlib.pyplot as plt
 
 import multiprocessing
 import time
@@ -39,9 +37,7 @@ import time
 p = psutil.Process(os.getpid())
 p.cpu_percent(None)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Configure logging
-# ──────────────────────────────────────────────────────────────────────────────
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
@@ -49,9 +45,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# DEM utilities
-# ──────────────────────────────────────────────────────────────────────────────
+
 class DEMReader:
     def __init__(self, dem_file):
         self.dem_file = dem_file
@@ -98,9 +92,7 @@ class DEMReader:
             self.src.close()
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Work evaluator with NetworKit Dijkstra
-# ──────────────────────────────────────────────────────────────────────────────
+
 def _work_for_origin(args):
     origin_cell, dest_list, cell_map, node2id, nkG, arc_work, idx, total_origins, start_time = args
     pid = os.getpid()
@@ -146,25 +138,26 @@ class WorkEvaluatorNK:
         self.ds  = ds
         self.m   = m
         self.g   = g
-
-        logger.info("Precomputing edge-work for all edges")
-        self.arc_work = {
-            (u, v): self._compute_edge_work(u, v)
-            for u, v, _ in G.edges(data=True)
-        }
-
-        logger.info("Converting NetworkX graph to NetworKit graph")
-
         self.node2id = {n:i for i,n in enumerate(G.nodes())}
         self.id2node = {i:n for n,i in self.node2id.items()}
 
-        # Precompute uphill work on each original edge
+        logger.info("Precomputing edge-work for all edges")
+        self.arc_work = {}
+        self.arc_work_segments = {}
+        for u, v, data in G.edges(data=True):
+            total_w, segments = self._compute_edge_work(u, v)
+            self.arc_work[(self.node2id[u], self.node2id[v])] = total_w
+            self.arc_work_segments[(self.node2id[u], self.node2id[v])] = segments
+
+        logger.info("Converting NetworkX graph to NetworKit graph")
+
         logger.info("Precomputing edge-work for all edges")
         arc_work_orig = {}
         for u, v, data in G.edges(data=True):
-            arc_work_orig[(u, v)] = self._compute_edge_work(u, v)
+            total_w, segments = self._compute_edge_work(u, v)
+            arc_work_orig[(u, v)] = total_w
 
-        # Build a NetworKit graph with contiguous integer IDs
+
         n = len(self.node2id)
         nkG = nk.Graph(n, weighted=True, directed=G.is_directed())
         for (u, v), w in arc_work_orig.items():
@@ -173,13 +166,13 @@ class WorkEvaluatorNK:
             nkG.addEdge(u_id, v_id, length)
 
         self.nkG = nkG
-        # Build an internal arc_work keyed by (int,int)
+
         self.arc_work = {
             (self.node2id[u], self.node2id[v]): w
             for (u, v), w in arc_work_orig.items()
         }
 
-        # cache for Dijkstra runners
+
         self._dijkstra_cache = {}
         logger.info("NetworKit graph built with %d nodes, %d edges",
                     nkG.numberOfNodes(), nkG.numberOfEdges())
@@ -208,11 +201,20 @@ class WorkEvaluatorNK:
         coords = [(pt.x, pt.y) for pt in pts]
 
         elevs = self.dem.sample(coords)
+        segment_results = []
         w = 0.0
-        for h1, h2 in zip(elevs, elevs[1:]):
+        for i, (h1, h2) in enumerate(zip(elevs, elevs[1:])):
             if h2 > h1:
-                w += self.m * self.g * (h2 - h1)
-        return w
+                seg_work = self.m * self.g * (h2 - h1)
+                w += seg_work
+            else:
+                seg_work = 0.0
+            segment_results.append({
+                'start_coord': coords[i],
+                'end_coord': coords[i+1],
+                'work': seg_work
+            })
+        return w, segment_results
 
     def compute_total_work(self, cell_map, od_df):
         logger.info("Computing total work for %d OD flows", len(od_df))
@@ -234,9 +236,7 @@ class WorkEvaluatorNK:
         logger.info("Total uphill work = %.2f", total)
         return total
 
-# ──────────────────────────────────────────────────────────────────────────────
-# I/O helpers
-# ──────────────────────────────────────────────────────────────────────────────
+
 
 
 def log_resources(stage: str):
@@ -262,7 +262,6 @@ def load_graphs(graphs_dir):
             G = pickle.load(f)
 
         if isinstance(G, (nx.MultiGraph, nx.MultiDiGraph)):
-            # logger.info(f"[{var}] collapsing MultiGraph → simple {type(G).__name__}")
             H = nx.DiGraph() if G.is_directed() else nx.Graph()
             for n, data in G.nodes(data=True):
                 H.add_node(n, **data)
@@ -282,14 +281,12 @@ def load_graphs(graphs_dir):
 
         if G.is_directed():
             if nx.is_weakly_connected(G):
-                # logger.info(f"[{var}] graph is weakly connected")
                 pass
             else:
                 n_comp = nx.number_weakly_connected_components(G)
                 logger.warning(f"[{var}] NOT weakly connected: {n_comp} components")
         else:
             if nx.is_connected(G):
-                # logger.info(f"[{var}] graph is connected")
                 pass
             else:
                 n_comp = nx.number_connected_components(G)
@@ -361,478 +358,13 @@ def map_cells_to_nodes(G, cell_df):
     logger.info(f"Mapped {len(mapping)} cells → {total} central nodes")
     return mapping
 
-def plot_work_by_variant(results_df, out_png):
-    """
-    Explanatory bar plot showing W_WD and W_HOL for each variant side by side.
-    """
-    variants = results_df['variant']
-    wd = results_df['work_wd']
-    hol = results_df['work_hol']
 
-    x = np.arange(len(variants))
-    width = 0.35
-
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.bar(x - width/2, wd, width, label='Working Day W')
-    ax.bar(x + width/2, hol, width, label='Holiday W')
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(variants, rotation=45, ha='right')
-    ax.set_ylabel('Total uphill work (m·units)')
-    ax.set_title('Total uphill work by variant')
-    ax.legend()
-    plt.tight_layout()
-    plt.savefig(out_png)
-    plt.close()
-    logger.info(f"Saved work-by-variant plot → {out_png}")
-
-def plot_variant_differences(results_df, out_png):
-    """
-    Plot percent difference in W_WD and W_HOL relative to the original network.
-    """
-    orig = results_df[results_df.variant == 'original'].iloc[0]
-    pert = results_df[results_df.variant != 'original'].copy()
-    pert['pct_diff_wd']  = (pert.work_wd  - orig.work_wd)  / orig.work_wd  * 100
-    pert['pct_diff_hol'] = (pert.work_hol - orig.work_hol) / orig.work_hol * 100
-
-    variants = pert['variant']
-    wd_diff  = pert['pct_diff_wd']
-    hol_diff = pert['pct_diff_hol']
-
-    x = np.arange(len(variants))
-    width = 0.35
-
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.bar(x - width/2, wd_diff, width, label='% Δ W_WD')
-    ax.bar(x + width/2, hol_diff, width, label='% Δ W_HOL')
-
-    ax.axhline(0, color='black', linewidth=0.8)
-    ax.set_xticks(x)
-    ax.set_xticklabels(variants, rotation=45, ha='right')
-    ax.set_ylabel('Percent difference versus original (%)')
-    ax.set_title('Percent change in uphill work by variant')
-    ax.legend()
-    plt.tight_layout()
-    plt.savefig(out_png)
-    plt.close()
-    logger.info(f"Saved percent-difference plot → {out_png}")
-
-def plot_arc_work_distribution(arc_work_dict, out_png):
-    """
-    Plot histogram of arc_work values.
-    """
-    vals = list(arc_work_dict.values())
-    plt.figure(figsize=(10,5))
-    plt.hist(vals, bins=50, color='skyblue', edgecolor='black')
-    plt.xlabel('Uphill work per edge (J)')
-    plt.ylabel('Count')
-    plt.title('Distribution of uphill work on edges')
-    plt.tight_layout()
-    plt.savefig(out_png)
-    plt.close()
-    logger.info(f"Saved arc-work distribution plot → {out_png}")
-
-def plot_dem_elevation_distribution(dem_reader, out_png):
-    """
-    Plot histogram of DEM elevation values (masked nodata).
-    """
-    with rasterio.open(dem_reader.dem_file) as src:
-        arr = src.read(1)
-        nodata = src.nodata
-        if nodata is not None:
-            arr = arr[arr != nodata]
-    plt.figure(figsize=(10,5))
-    plt.hist(arr.flatten(), bins=100, color='lightgreen', edgecolor='black')
-    plt.xlabel('Elevation (m)')
-    plt.ylabel('Count')
-    plt.title('Distribution of DEM elevation values')
-    plt.tight_layout()
-    plt.savefig(out_png)
-    plt.close()
-    logger.info(f"Saved DEM elevation distribution plot → {out_png}")
-
-
-def plot_arc_work_boxplot(arc_work_dict, out_png):
-    """
-    Boxplot of uphill work per edge.
-    """
-    vals = list(arc_work_dict.values())
-    plt.figure(figsize=(6,8))
-    plt.boxplot(vals, vert=True, patch_artist=True,
-                boxprops=dict(facecolor='lightblue', color='black'),
-                medianprops=dict(color='red'))
-    plt.ylabel('Uphill work per edge (J)')
-    plt.title('Boxplot of uphill work on edges')
-    plt.tight_layout()
-    plt.savefig(out_png)
-    plt.close()
-    logger.info(f"Saved arc-work boxplot → {out_png}")
-
-
-def plot_cell_node_mapping(cell_df, cell_map, G, out_png):
-    """
-    Scatter plot of cell centroids and their mapped node.
-    """
-    centroids = cell_df[['cent_lon','cent_lat']].values
-    node_coords = []
-    for cell, node in cell_map.items():
-        if node is not None:
-            data = G.nodes[node]
-            lon = data.get('x', data.get('lon'))
-            lat = data.get('y', data.get('lat'))
-            node_coords.append((lon, lat))
-    node_coords = np.array(node_coords)
-    plt.figure(figsize=(8,8))
-    plt.scatter(centroids[:,0], centroids[:,1], s=10, c='red', label='Cell centroids')
-    plt.scatter(node_coords[:,0], node_coords[:,1], s=5, c='blue', label='Mapped nodes')
-    plt.xlabel('Longitude')
-    plt.ylabel('Latitude')
-    plt.title('Cell centroids vs mapped node')
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(out_png)
-    plt.close()
-    logger.info(f"Saved cell-node mapping plot → {out_png}")
-
-
-def check_available_variant_types(results_df):
-    """
-    Check which types of variants are available in the results.
-    Returns a dictionary with boolean flags for each type.
-    """
-    variants = results_df['variant'].tolist()
-    
-    has_translations = any('translat' in v.lower() for v in variants)
-    has_rotations = any('rotat' in v.lower() for v in variants)
-    has_scaling = any('scal' in v.lower() for v in variants)
-    has_original = 'original' in variants
-    
-    logger.info(f"Available variant types: translations={has_translations}, "
-                f"rotations={has_rotations}, scaling={has_scaling}, original={has_original}")
-    
-    return {
-        'translations': has_translations,
-        'rotations': has_rotations, 
-        'scaling': has_scaling,
-        'original': has_original
-    }
-
-
-def plot_work_parabolic_translations(results_df, stats_df, out_png):
-    orig_row = results_df[results_df.variant == 'original']
-    translation_variants = results_df[results_df.variant.str.contains('translat', case=False, na=False)]
-    
-    if len(orig_row) == 0:
-        logger.warning("No 'original' variant found for translation plot")
-        return
-    
-    if len(translation_variants) == 0:
-        logger.warning("No translation variants found")
-        return
-    
-    # Merge with stats to get transformation parameters
-    merged = translation_variants.merge(stats_df, on='variant', how='left')
-    
-    translated_variants = []
-    for _, row in merged.iterrows():
-        offset_x = row['offset_x']
-        offset_y = row['offset_y']
-        sort_key = offset_x + offset_y
-        translated_variants.append((sort_key, offset_x, offset_y, row['work_wd'], row['work_hol'], row['variant']))
-    
-    translated_variants.sort(key=lambda x: x[0])
-    
-    orig_wd = orig_row.iloc[0]['work_wd']
-    orig_hol = orig_row.iloc[0]['work_hol']
-    
-    all_sort_keys = [sort_key for sort_key, _, _, _, _, _ in translated_variants]
-    all_wd = [wd for _, _, _, wd, _, _ in translated_variants]
-    all_hol = [hol for _, _, _, _, hol, _ in translated_variants]
-    all_offset_x = [offset_x for _, offset_x, _, _, _, _ in translated_variants]
-    all_offset_y = [offset_y for _, _, offset_y, _, _, _ in translated_variants]
-    all_names = [name for _, _, _, _, _, name in translated_variants]
-    
-    n_total = len(translated_variants) + 1
-    center_idx = len(translated_variants) // 2
-    
-    # Get original offsets from stats
-    orig_stats = stats_df[stats_df.variant == 'original'].iloc[0]
-    orig_offset_x = orig_stats['offset_x']
-    orig_offset_y = orig_stats['offset_y']
-    
-    all_sort_keys.insert(center_idx, orig_offset_x + orig_offset_y)
-    all_wd.insert(center_idx, orig_wd)
-    all_hol.insert(center_idx, orig_hol)
-    all_offset_x.insert(center_idx, orig_offset_x)
-    all_offset_y.insert(center_idx, orig_offset_y)
-    all_names.insert(center_idx, 'Original')
-    
-    x_positions = list(range(len(all_sort_keys)))
-    x_labels = []
-    
-    for i, name in enumerate(all_names):
-        if name == 'Original':
-            x_labels.append(f'Original\n({orig_offset_x:.2f},{orig_offset_y:.2f})')
-        else:
-            offset_x = all_offset_x[i]
-            offset_y = all_offset_y[i]
-            x_labels.append(f'Δx:{offset_x:.2f}\nΔy:{offset_y:.2f}')
-    
-    x_positions = np.array(x_positions)
-    wd_values = np.array(all_wd)
-    hol_values = np.array(all_hol)
-    
-    fig, ax = plt.subplots(figsize=(16, 8))
-    
-    ax.plot(x_positions, wd_values, 'o-', linewidth=2.5, markersize=8, 
-            label='Working Day', color='blue', alpha=0.8)
-    ax.plot(x_positions, hol_values, 's-', linewidth=2.5, markersize=8, 
-            label='Holiday', color='red', alpha=0.8)
-    
-    orig_idx = center_idx
-    ax.plot(x_positions[orig_idx], wd_values[orig_idx], 'o', markersize=14, color='blue', 
-            markerfacecolor='gold', markeredgewidth=3, markeredgecolor='blue')
-    ax.plot(x_positions[orig_idx], hol_values[orig_idx], 's', markersize=14, color='red', 
-            markerfacecolor='gold', markeredgewidth=3, markeredgecolor='red')
-    
-    ax.axvline(x=x_positions[orig_idx], color='black', linestyle='--', alpha=0.6, linewidth=2)
-    
-    max_y = max(wd_values[orig_idx], hol_values[orig_idx])
-    y_range = max(max(wd_values), max(hol_values)) - min(min(wd_values), min(hol_values))
-    ax.annotate('Original Network', 
-               xy=(x_positions[orig_idx], max_y), 
-               xytext=(x_positions[orig_idx], max_y + y_range * 0.08),
-               ha='center', fontsize=12, fontweight='bold', color='black',
-               arrowprops=dict(arrowstyle='->', color='black', alpha=0.8, lw=1.5))
-    
-    ax.set_xticks(x_positions)
-    ax.set_xticklabels(x_labels, rotation=0, ha='center', fontsize=10)
-    ax.set_xlabel('Translation Variants (offset_x, offset_y)', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Total Uphill Work (m·units)', fontsize=12, fontweight='bold')
-    ax.set_title('Gravitational Work vs Network Translation\n(Original Network at Center)', 
-                fontsize=14, fontweight='bold')
-    ax.legend(fontsize=11)
-    ax.grid(True, alpha=0.3)
-    
-    y_min = min(min(wd_values), min(hol_values))
-    y_max = max(max(wd_values), max(hol_values))
-    y_range = y_max - y_min
-    ax.set_ylim(y_min - y_range * 0.05, y_max + y_range * 0.15)
-    
-    plt.tight_layout()
-    plt.savefig(out_png, dpi=300, bbox_inches='tight')
-    plt.close()
-    logger.info(f"Saved translation work plot → {out_png}")
-
-
-def plot_work_parabolic_rotations(results_df, stats_df, out_png):
-    orig_row = results_df[results_df.variant == 'original']
-    rotation_variants = results_df[results_df.variant.str.contains('rotat', case=False, na=False)]
-    
-    if len(orig_row) == 0:
-        logger.warning("No 'original' variant found for rotation plot")
-        return
-    
-    if len(rotation_variants) == 0:
-        logger.warning("No rotation variants found")
-        return
-    
-    # Merge with stats to get transformation parameters
-    merged = rotation_variants.merge(stats_df, on='variant', how='left')
-    
-    rotated_variants = []
-    for _, row in merged.iterrows():
-        angle = row['angle_deg']
-        if pd.isna(angle):
-            continue
-        rotated_variants.append((angle, row['work_wd'], row['work_hol'], row['variant']))
-    
-    rotated_variants.sort(key=lambda x: x[0])
-    
-    orig_wd = orig_row.iloc[0]['work_wd']
-    orig_hol = orig_row.iloc[0]['work_hol']
-    
-    all_angles = [angle for angle, _, _, _ in rotated_variants]
-    all_wd = [wd for _, wd, _, _ in rotated_variants]
-    all_hol = [hol for _, _, hol, _ in rotated_variants]
-    all_names = [name for _, _, _, name in rotated_variants]
-    
-    n_total = len(rotated_variants) + 1
-    center_idx = len(rotated_variants) // 2
-    
-    # Get original angle from stats (should be NaN/empty for original)
-    orig_stats = stats_df[stats_df.variant == 'original'].iloc[0]
-    orig_angle = 0.0  # Original has no rotation
-    
-    all_angles.insert(center_idx, orig_angle)
-    all_wd.insert(center_idx, orig_wd)
-    all_hol.insert(center_idx, orig_hol)
-    all_names.insert(center_idx, 'Original')
-    
-    x_positions = list(range(len(all_angles)))
-    x_labels = []
-    
-    for i, name in enumerate(all_names):
-        if name == 'Original':
-            x_labels.append('Original\n(0°)')
-        else:
-            angle = all_angles[i]
-            x_labels.append(f'{angle:.1f}°')
-    
-    x_positions = np.array(x_positions)
-    wd_values = np.array(all_wd)
-    hol_values = np.array(all_hol)
-    
-    fig, ax = plt.subplots(figsize=(16, 8))
-    
-    ax.plot(x_positions, wd_values, 'o-', linewidth=2.5, markersize=8, 
-            label='Working Day', color='green', alpha=0.8)
-    ax.plot(x_positions, hol_values, 's-', linewidth=2.5, markersize=8, 
-            label='Holiday', color='orange', alpha=0.8)
-    
-    orig_idx = center_idx
-    ax.plot(x_positions[orig_idx], wd_values[orig_idx], 'o', markersize=14, color='green', 
-            markerfacecolor='gold', markeredgewidth=3, markeredgecolor='green')
-    ax.plot(x_positions[orig_idx], hol_values[orig_idx], 's', markersize=14, color='orange', 
-            markerfacecolor='gold', markeredgewidth=3, markeredgecolor='orange')
-    
-    ax.axvline(x=x_positions[orig_idx], color='black', linestyle='--', alpha=0.6, linewidth=2)
-    
-    max_y = max(wd_values[orig_idx], hol_values[orig_idx])
-    y_range = max(max(wd_values), max(hol_values)) - min(min(wd_values), min(hol_values))
-    ax.annotate('Original Network', 
-               xy=(x_positions[orig_idx], max_y), 
-               xytext=(x_positions[orig_idx], max_y + y_range * 0.08),
-               ha='center', fontsize=12, fontweight='bold', color='black',
-               arrowprops=dict(arrowstyle='->', color='black', alpha=0.8, lw=1.5))
-    
-    ax.set_xticks(x_positions)
-    ax.set_xticklabels(x_labels, rotation=0, ha='center', fontsize=10)
-    ax.set_xlabel('Rotation Variants (degrees)', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Total Uphill Work (m·units)', fontsize=12, fontweight='bold')
-    ax.set_title('Gravitational Work vs Network Rotation\n(Original Network at Center)', 
-                fontsize=14, fontweight='bold')
-    ax.legend(fontsize=11)
-    ax.grid(True, alpha=0.3)
-    
-    y_min = min(min(wd_values), min(hol_values))
-    y_max = max(max(wd_values), max(hol_values))
-    y_range = y_max - y_min
-    ax.set_ylim(y_min - y_range * 0.05, y_max + y_range * 0.15)
-    
-    plt.tight_layout()
-    plt.savefig(out_png, dpi=300, bbox_inches='tight')
-    plt.close()
-    logger.info(f"Saved rotation work plot → {out_png}")
-
-
-def plot_work_parabolic_scaling(results_df, stats_df, out_png):
-    orig_row = results_df[results_df.variant == 'original']
-    scaling_variants = results_df[results_df.variant.str.contains('scal', case=False, na=False)]
-    
-    if len(orig_row) == 0:
-        logger.warning("No 'original' variant found for scaling plot")
-        return
-    
-    if len(scaling_variants) == 0:
-        logger.warning("No scaling variants found")
-        return
-    
-    # Merge with stats to get transformation parameters
-    merged = scaling_variants.merge(stats_df, on='variant', how='left')
-    
-    scaled_variants = []
-    for _, row in merged.iterrows():
-        scale = row['scale_factor']
-        if pd.isna(scale):
-            continue
-        scaled_variants.append((scale, row['work_wd'], row['work_hol'], row['variant']))
-    
-    scaled_variants.sort(key=lambda x: x[0])
-    
-    orig_wd = orig_row.iloc[0]['work_wd']
-    orig_hol = orig_row.iloc[0]['work_hol']
-    
-    all_scales = [scale for scale, _, _, _ in scaled_variants]
-    all_wd = [wd for _, wd, _, _ in scaled_variants]
-    all_hol = [hol for _, _, hol, _ in scaled_variants]
-    all_names = [name for _, _, _, name in scaled_variants]
-    
-    n_total = len(scaled_variants) + 1
-    center_idx = len(scaled_variants) // 2
-    
-    # Original has scale factor 1.0
-    orig_scale = 1.0
-    
-    all_scales.insert(center_idx, orig_scale)
-    all_wd.insert(center_idx, orig_wd)
-    all_hol.insert(center_idx, orig_hol)
-    all_names.insert(center_idx, 'Original')
-    
-    x_positions = list(range(len(all_scales)))
-    x_labels = []
-    
-    for i, name in enumerate(all_names):
-        if name == 'Original':
-            x_labels.append('Original\n(×1.0)')
-        else:
-            scale = all_scales[i]
-            x_labels.append(f'×{scale:.2f}')
-    
-    x_positions = np.array(x_positions)
-    wd_values = np.array(all_wd)
-    hol_values = np.array(all_hol)
-    
-    fig, ax = plt.subplots(figsize=(16, 8))
-    
-    ax.plot(x_positions, wd_values, 'o-', linewidth=2.5, markersize=8, 
-            label='Working Day', color='purple', alpha=0.8)
-    ax.plot(x_positions, hol_values, 's-', linewidth=2.5, markersize=8, 
-            label='Holiday', color='brown', alpha=0.8)
-    
-    orig_idx = center_idx
-    ax.plot(x_positions[orig_idx], wd_values[orig_idx], 'o', markersize=14, color='purple', 
-            markerfacecolor='gold', markeredgewidth=3, markeredgecolor='purple')
-    ax.plot(x_positions[orig_idx], hol_values[orig_idx], 's', markersize=14, color='brown', 
-            markerfacecolor='gold', markeredgewidth=3, markeredgecolor='brown')
-    
-    ax.axvline(x=x_positions[orig_idx], color='black', linestyle='--', alpha=0.6, linewidth=2)
-    
-    max_y = max(wd_values[orig_idx], hol_values[orig_idx])
-    y_range = max(max(wd_values), max(hol_values)) - min(min(wd_values), min(hol_values))
-    ax.annotate('Original Network', 
-               xy=(x_positions[orig_idx], max_y), 
-               xytext=(x_positions[orig_idx], max_y + y_range * 0.08),
-               ha='center', fontsize=12, fontweight='bold', color='black',
-               arrowprops=dict(arrowstyle='->', color='black', alpha=0.8, lw=1.5))
-    
-    ax.set_xticks(x_positions)
-    ax.set_xticklabels(x_labels, rotation=0, ha='center', fontsize=10)
-    ax.set_xlabel('Scaling Variants (scale factor)', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Total Uphill Work (m·units)', fontsize=12, fontweight='bold')
-    ax.set_title('Gravitational Work vs Network Scaling\n(Original Network at Center)', 
-                fontsize=14, fontweight='bold')
-    ax.legend(fontsize=11)
-    ax.grid(True, alpha=0.3)
-    
-    y_min = min(min(wd_values), min(hol_values))
-    y_max = max(max(wd_values), max(hol_values))
-    y_range = y_max - y_min
-    ax.set_ylim(y_min - y_range * 0.05, y_max + y_range * 0.15)
-    
-    plt.tight_layout()
-    plt.savefig(out_png, dpi=300, bbox_inches='tight')
-    plt.close()
-    logger.info(f"Saved scaling work plot → {out_png}")
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# main
-# ──────────────────────────────────────────────────────────────────────────────
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('-c', '--conf', default='conf_wheight.json')
     p.add_argument('-city', '--city', help='City name to override conf file')
+    p.add_argument('-p', '--plot', action='store_true', help='Run plotting script at the end')
+
     args = p.parse_args()
     conf = json.load(open(args.conf))
     
@@ -862,11 +394,10 @@ def main():
     ds = conf.get('ds', 10.0)
     m, g = conf.get('m', 1.0), conf.get('g', 1.0)
 
-    # graphs
+
     graphs, stats = load_graphs(graphs_dir)
     G0     = graphs['original']
 
-    # DEM
     dem = DEMReader(dem_file)
     dem.ensure_dem(api_key, {
         "min_lon": bbox[0][1], "min_lat": bbox[0][0],
@@ -874,7 +405,7 @@ def main():
     })
     dem.open()
 
-    # cells & OD
+
     cells   = load_cells(cells_file, cells_crs, bbox)
     od_work = load_od(od_w_file)
     od_hol  = load_od(od_h_file)
@@ -884,7 +415,7 @@ def main():
     logger.info(f"Filtered OD: work={len(od_work)}, hol={len(od_hol)}")
     cell_map = map_cells_to_nodes(G0, cells)
 
-    # compute work
+
     results = []
     for var, G in graphs.items():
         logger.info(f"=== Variant '{var}' ===")
@@ -893,62 +424,53 @@ def main():
         wd = ev.compute_total_work(cell_map, od_work)
         ho = ev.compute_total_work(cell_map, od_hol)
         results.append({'variant':var,'work_wd':wd,'work_hol':ho})
+
+        rows = []
+        for (u, v), segments in ev.arc_work_segments.items():
+            for seg in segments:
+                rows.append({
+                    'u': ev.id2node[u],
+                    'v': ev.id2node[v],
+                    'start_x': seg['start_coord'][0],
+                    'start_y': seg['start_coord'][1],
+                    'end_x': seg['end_coord'][0],
+                    'end_y': seg['end_coord'][1],
+                    'segment_work': seg['work']
+                })
+        seg_work_df = pd.DataFrame(rows)
+        seg_work_csv = os.path.join(graphs_dir, f'arc_work_segments_{var}.csv')
+        seg_work_df.to_csv(seg_work_csv, index=False)
+        logger.info(f"Arc work per segment saved → {seg_work_csv}")        
         log_resources(f"end variant {var}")
 
-    # save
+
     df = pd.DataFrame(results)
     out_csv = os.path.join(graphs_dir, 'gravitational_work_by_variant.csv')
     df.to_csv(out_csv, index=False)
     logger.info(f"Results saved → {out_csv}")
 
-    # explanatory plots
-    work_png = os.path.join(graphs_dir, 'work_by_variant.png')
-    plot_work_by_variant(df, work_png)
-
-    diff_png = os.path.join(graphs_dir, 'variant_differences.png')
-    plot_variant_differences(df, diff_png)
-
-    # parabolic plots for different variant types (only if data is available)
-    available_types = check_available_variant_types(df)
-    
-    if not available_types['original']:
-        logger.warning("No 'original' variant found - parabolic plots may not work correctly")
-    
-    if available_types['translations']:
-        translations_png = os.path.join(graphs_dir, 'work_parabolic_translations.png')
-        plot_work_parabolic_translations(df, stats, translations_png)
+    if args.plot:
+        logger.info("Generating plots using external plotting script...")
+        plot_script = os.path.join(os.path.dirname(__file__), 'plot_gravitational_work.py')
+        plot_cmd = [sys.executable, plot_script, '-c', args.conf]
+        if args.city:
+            plot_cmd.extend(['-city', args.city])
+        
+        import subprocess
+        try:
+            result = subprocess.run(plot_cmd, capture_output=True, text=True, check=True)
+            logger.info("Plot generation completed successfully")
+            if result.stdout:
+                logger.info(f"Plot script output: {result.stdout}")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Plot generation failed: {e}")
+            if e.stdout:
+                logger.error(f"Stdout: {e.stdout}")
+            if e.stderr:
+                logger.error(f"Stderr: {e.stderr}")
     else:
-        logger.info("No translation variants found - skipping translation plot")
-    
-    if available_types['rotations']:
-        rotations_png = os.path.join(graphs_dir, 'work_parabolic_rotations.png')
-        plot_work_parabolic_rotations(df, stats, rotations_png)
-    else:
-        logger.info("No rotation variants found - skipping rotation plot")
-    
-    if available_types['scaling']:
-        scaling_png = os.path.join(graphs_dir, 'work_parabolic_scaling.png')
-        plot_work_parabolic_scaling(df, stats, scaling_png)
-    else:
-        logger.info("No scaling variants found - skipping scaling plot")
-
-    # additional diagnostic plots
-    # arc-work distribution for original graph
-    ev0 = WorkEvaluatorNK(G0, dem, ds=ds, m=m, g=g)
-    aw_png = os.path.join(graphs_dir, 'arc_work_distribution.png')
-    plot_arc_work_distribution(ev0.arc_work, aw_png)
-
-    # arc-work boxplot
-    aw_box_png = os.path.join(graphs_dir, 'arc_work_boxplot.png')
-    plot_arc_work_boxplot(ev0.arc_work, aw_box_png)
-
-    # DEM elevation histogram
-    dem_hist_png = os.path.join(graphs_dir, 'dem_elevation_distribution.png')
-    plot_dem_elevation_distribution(dem, dem_hist_png)
-
-    # cell-node mapping scatter
-    cnm_png = os.path.join(graphs_dir, 'cell_node_mapping.png')
-    plot_cell_node_mapping(cells, cell_map, G0, cnm_png)
+        logger.info("Skipping plot generation as --plot flag not set.")
+        logger.info("To generate plots, run 'plot_gravitational_work.py' separately.")
 
     dem.close()
 

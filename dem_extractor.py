@@ -19,6 +19,15 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 import matplotlib.pyplot as plt
+
+def get_polygon_coordinates(geom):
+    coords = []
+    if geom.geom_type == 'Polygon':
+        coords.append([(lat, lon) for lon, lat in geom.exterior.coords])
+    elif geom.geom_type == 'MultiPolygon':
+        for polygon in geom.geoms:
+            coords.append([(lat, lon) for lon, lat in polygon.exterior.coords])
+    return coords
 import matplotlib
 matplotlib.use("Agg")
 import contextily as ctx
@@ -28,28 +37,44 @@ from shapely.wkt import loads as load_wkt
 from data_processing import DEMReader
 from utils import logger
 
-import folium
-from folium import FeatureGroup
 import matplotlib.colors as mcolors
 import time
 
-# global total variants count for logging
 VARIANT_COUNT = 0
 
+_G = None
+_GRAPHS_DIR = None
+_CENTER_Y = None
+_CENTER_X = None
+_LAND_MASK = None
+_DEM_TREE = None
+_DEM_ALTS = None
+_PRODUCE_MAPS = True
+_CMAP = None
+
+def _init_worker(dem_file, graphs_dir, center_y, center_x, produce_maps=True, cmap_N=None):
+    global _GRAPHS_DIR, _CENTER_Y, _CENTER_X, _DEM_TREE, _DEM_ALTS, _PRODUCE_MAPS, _CMAP
+    _GRAPHS_DIR = graphs_dir
+    _CENTER_Y = center_y
+    _CENTER_X = center_x
+    _PRODUCE_MAPS = bool(produce_maps)
+    if cmap_N is None:
+        _CMAP = plt.get_cmap('Set1')
+    else:
+        _CMAP = plt.get_cmap('Set1', int(cmap_N))
+    reader = DEMReader(dem_file)
+    dem_gdf = reader.get_pixel_centroids()
+    dem_coords = np.vstack((dem_gdf.geometry.y.values, dem_gdf.geometry.x.values)).T
+    _DEM_ALTS = dem_gdf['alt'].values.astype(float)
+    _DEM_TREE = cKDTree(dem_coords)
+
 def is_dem_complete(path):
-    """Check if the DEM file exists and is larger than 1MB."""
     return os.path.exists(path) and os.path.getsize(path) > 1e6
 
-
 def download_dem(dem_path, bounds, api_key):
-    """
-    Download the DEM using the bounding box with 50% padding.
-    bounds: [minx, miny, maxx, maxy] in EPSG:4326
-    """
     if is_dem_complete(dem_path):
         logger.info(f"DEM already exists: {dem_path}")
         return
-    # Compute 50% padding
     minx, miny, maxx, maxy = bounds
     dx = maxx - minx
     dy = maxy - miny
@@ -75,20 +100,13 @@ def load_metropolis_bbox(json_path, city_key):
     return Polygon(swapped_coords)
 
 def assign_altitudes(G, dem_reader):
-    """
-    Efficiently assign altitude to each node using KDTree nearest-neighbor lookup.
-    """
     dem_gdf = dem_reader.get_pixel_centroids()
-    # build KDTree on DEM pixel centroids
-
     dem_coords = np.vstack((dem_gdf.geometry.y.values, dem_gdf.geometry.x.values)).T
     dem_alts = dem_gdf['alt'].values
     tree = cKDTree(dem_coords)
 
-    # get node coordinates
     nodes = list(G.nodes(data=True))
     node_coords = np.array([[data['y'], data['x']] for _, data in nodes])
-    # query nearest DEM altitude
     dists, idxs = tree.query(node_coords, k=1)
     missing = 0
 
@@ -101,9 +119,21 @@ def assign_altitudes(G, dem_reader):
         logger.warning(f"{missing} nodes without assigned altitude.")
     return missing
 
+def assign_altitudes_from_tree(G, tree, dem_alts):
+    nodes = list(G.nodes(data=True))
+    node_coords = np.array([[data['y'], data['x']] for _, data in nodes])
+    _, idxs = tree.query(node_coords, k=1)
+    missing = 0
+    for (node, data), alt_idx in zip(nodes, idxs):
+        z = float(dem_alts[int(alt_idx)])
+        data['z'] = z
+        if z == 0:
+            missing += 1
+    if missing:
+        logger.warning(f"{missing} nodes without assigned altitude.")
+    return missing
 
 def compute_graph_statistics(G):
-    """Compute basic statistics for the enriched graph."""
     zs = [d.get('z', 0) for _, d in G.nodes(data=True)]
     lengths = [d.get('length', 0) for _, _, d in G.edges(data=True)]
     return {
@@ -161,7 +191,7 @@ def scale_graph(G, scale_factor, axis='both', origin=None):
     nx.set_node_attributes(G, attr)
     return G
 
-def process_folder(folder, base_path, offsets, rotations, scales, cmap, api_key):
+def process_folder(folder, base_path, offsets, rotations, scales, cmap, api_key, workers=None, produce_maps=True):
     logger.info(f"[{folder}] Starting processing folder")
     folder_path = os.path.join(base_path, folder)
     csv_file    = os.path.join(folder_path, 'data_useful.csv')
@@ -223,19 +253,8 @@ def process_folder(folder, base_path, offsets, rotations, scales, cmap, api_key)
 
     city_poly = load_metropolis_bbox(json_bbox, folder)
     logger.info(f"[{folder}] City polygon loaded with bounds {city_poly.bounds}")
-
-    folium_map = folium.Map(location=[center_y, center_x], zoom_start=13)
-
+    
     minx, miny, maxx, maxy = city_poly.bounds
-
-    folium.Polygon(
-        locations=[(lon, lat) for lat, lon in city_poly.exterior.coords],
-        color='blue', fill=True, fill_opacity=0.1
-    ).add_to(folium_map)
-
-    city_map_file = os.path.join(graphs_dir, f'{folder}_city_bbox.html')
-    folium_map.save(city_map_file)
-    logger.info(f"[{folder}] Saved city bbox map to {city_map_file}")
 
     raw_dir = "/data/workspaces/fbellisardi/land"
     shp_file = os.path.join(raw_dir, "ne_10m_land.shp")
@@ -252,17 +271,6 @@ def process_folder(folder, base_path, offsets, rotations, scales, cmap, api_key)
 
     land_gdf = gpd.read_file(land_shp).to_crs('EPSG:4326')
     polygon = land_gdf.geometry.union_all()
-
-    folium_map2 = folium.Map(location=[center_y, center_x], zoom_start=13)
-
-    folium.Polygon(
-        locations=[(lon, lat) for lat, lon in polygon.exterior.coords],
-        color='blue', fill=True, fill_opacity=0.1
-    ).add_to(folium_map2)
-
-    city_map_file = os.path.join(graphs_dir, f'{folder}_city_bbox_landed.html')
-    folium_map2.save(city_map_file)
-    logger.info(f"[{folder}] Saved city bbox map to {city_map_file}")
 
     graph_original_pkl = os.path.join(graphs_dir, 'graph_original.pkl')
     if os.path.exists(graph_original_pkl):
@@ -342,11 +350,16 @@ def process_folder(folder, base_path, offsets, rotations, scales, cmap, api_key)
         logger.info(f"[{folder}] Saved static graph map to {png_path}")
     
     stats_records = []
-    folium_map = folium.Map(location=[center_y, center_x], zoom_start=13)
 
     variants = []
-    for idx, off in enumerate(offsets):
-        name = 'original' if idx == 0 else f'translated_{idx}'
+    variants.append({'variant': 'original',
+                     'type': 'translate',
+                     'offset': (0.0, 0.0),
+                     'offset_x': 0.0,
+                     'offset_y': 0.0})
+    
+    for idx, off in enumerate(offsets[1:], start=1):
+        name = f'translated_{idx}'
         variants.append({'variant': name,
                          'type': 'translate',
                          'offset': off,
@@ -369,17 +382,29 @@ def process_folder(folder, base_path, offsets, rotations, scales, cmap, api_key)
 
     args_list = []
     for idx, meta in enumerate(variants):
-        args_list.append(
-            (G, dem_file, graphs_dir, center_y, center_x,
-             land_mask, meta, idx, cmap)
-        )
-    # set total number of variants for logging
+        args_list.append((meta, idx))
+
     global VARIANT_COUNT
     VARIANT_COUNT = len(args_list)
     total_start = time.time()
-    logger.info(f"[{folder}] Starting variant processing on {mp.cpu_count()} cores")
-    with mp.Pool(processes=mp.cpu_count()) as pool:
-        results = pool.map(process_variant, args_list)
+    workers = workers or mp.cpu_count()
+    logger.info(f"[{folder}] Starting variant processing on {workers} cores")
+    global _G, _LAND_MASK
+    _G = G
+    _LAND_MASK = land_mask
+    results = []
+    cmap_N = getattr(cmap, 'N', len(variants))
+    if workers == 1:
+        _init_worker(dem_file, graphs_dir, center_y, center_x, produce_maps, cmap_N)
+        global _CMAP
+        _CMAP = plt.get_cmap('Set1', cmap_N)
+        for a in args_list:
+            results.append(process_variant(a))
+    else:
+        with mp.Pool(processes=workers,
+                     initializer=_init_worker,
+                     initargs=(dem_file, graphs_dir, center_y, center_x, produce_maps, cmap_N)) as pool:
+            results = pool.map(process_variant, args_list)
     total_end = time.time()
     logger.info(f"[{folder}] Completed all variants in {total_end - total_start:.2f} seconds")
     for stats in results:
@@ -392,52 +417,69 @@ def process_folder(folder, base_path, offsets, rotations, scales, cmap, api_key)
         'num_nodes','num_edges','z_mean','z_min','z_max','edge_len_mean','missing_altitude'
     ]
     if stats_records:
-        write_header = not os.path.exists(stats_file)
-        with open(stats_file, 'a', newline='') as f:
-            # writer = csv.DictWriter(f, fieldnames=stats_records[0].keys())
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            if write_header:
-                writer.writeheader()
-            writer.writerows(stats_records)
-        logger.info(f"[{folder}] Exported stats to {stats_file}")
+        existing = set()
+        if os.path.exists(stats_file):
+            try:
+                with open(stats_file, 'r', newline='') as f:
+                    for row in csv.DictReader(f):
+                        v = row.get('variant')
+                        if v:
+                            existing.add(v)
+            except Exception as e:
+                logger.warning(f"[{folder}] Could not read existing stats for deduplication: {e}")
+        to_write = [r for r in stats_records if r.get('variant') not in existing]
+        if not to_write:
+            logger.info(f"[{folder}] No new stats to append; all variants already present in CSV")
+        else:
+            write_header = not os.path.exists(stats_file)
+            with open(stats_file, 'a', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                if write_header:
+                    writer.writeheader()
+                writer.writerows(to_write)
+            logger.info(f"[{folder}] Exported {len(to_write)} new stats rows to {stats_file}")
+    try:
+        from tools.build_maps_index import process_city as _build_maps_index
+        _build_maps_index(base_path, folder, iframes=False)
+        logger.info(f"[{folder}] Updated maps index in graphs directory")
+    except Exception as e:
+        logger.warning(f"[{folder}] Could not update maps index: {e}")
+
     logger.info(f"[{folder}] Finished processing folder")
 
 def process_variant(args):
-    (G, dem_file, graphs_dir, center_y, center_x,
-     land_mask, meta, idx, cmap) = args
-    from data_processing import DEMReader
+    (meta, idx) = args
     variant_start = time.time()
     pid = os.getpid()
     try:
         core = os.sched_getcpu()
     except AttributeError:
         core = 'N/A'
-    dem_reader = DEMReader(dem_file)
     variant = meta['variant']
     logger.info(f"Processing variant: {variant} ({idx+1}/{VARIANT_COUNT}) in process {pid} on core {core}")
-    import pickle, folium, matplotlib.colors as mcolors
+    import pickle, matplotlib.colors as mcolors
 
-    pkl_path = os.path.join(graphs_dir, f'graph_{variant}.pkl')
+    pkl_path = os.path.join(_GRAPHS_DIR, f'graph_{variant}.pkl')
     if os.path.exists(pkl_path):
         with open(pkl_path, 'rb') as f:
             G_var = pickle.load(f)
     else:
         if meta['type'] == 'translate':
-            G_var = translate_graph(G.copy(), meta['offset'])
+            G_var = translate_graph(_G.copy(), meta['offset'])
         elif meta['type'] == 'rotate':
-            G_var = rotate_graph(G.copy(), meta['angle_deg'])
+            G_var = rotate_graph(_G.copy(), meta['angle_deg'])
         elif meta['type'] == 'scale':
             G_var = scale_graph(
-                G.copy(),
+                _G.copy(),
                 meta['scale_factor'],
                 axis=meta.get('axis','both')
             )
         else:
-            G_var = G.copy()
-        if any(not Point(d['x'], d['y']).within(land_mask) for _, d in G_var.nodes(data=True)):
+            G_var = _G.copy()
+        if any(not Point(d['x'], d['y']).within(_LAND_MASK) for _, d in G_var.nodes(data=True)):
             logger.warning(f"Variant {variant} has nodes outside the land mask, skipping.")
             return None
-        missing = assign_altitudes(G_var, dem_reader)
+        missing = assign_altitudes_from_tree(G_var, _DEM_TREE, _DEM_ALTS)
         for u, v, d in G_var.edges(data=True):
             d.setdefault('length', d.get('length', 1))
         with open(pkl_path, 'wb') as f:
@@ -446,19 +488,116 @@ def process_variant(args):
     stats['variant'] = variant
     stats.update({k: v for k, v in meta.items() if k not in ['variant', 'type', 'offset']})
     stats['missing_altitude'] = sum(1 for _,d in G_var.nodes(data=True) if d.get('z',0)==0)
-    variant_map = folium.Map(location=[center_y, center_x], zoom_start=13)
-    color = mcolors.to_hex(cmap(idx))
-    for u,v in G_var.edges():
-        y1,x1 = G_var.nodes[u]['y'], G_var.nodes[u]['x']
-        y2,x2 = G_var.nodes[v]['y'], G_var.nodes[v]['x']
-        folium.PolyLine([(y1,x1),(y2,x2)], color=color, weight=2).add_to(variant_map)
-    variant_map_file = os.path.join(graphs_dir, f'graph_{variant}_map.html')
-    variant_map.save(variant_map_file)
+    # HTML map generation removed for performance - use separate map_generator.py script
     variant_end = time.time()
     logger.info(f"Variant {variant} completed in {variant_end - variant_start:.2f} seconds")
     return stats
 
-def main(api_key=None, example_city=None):
+def generate_runlog_commands(base_path=None, output_file=None):
+    config_path = "/home/fbellisardi/code/topolity/tools/conf/conf_extractor.json"
+    with open(config_path, 'r') as f:
+        config = json.load(f)
+    
+    if base_path is None:
+        base_path = config.get("base_path", "/data/workspaces/fbellisardi/data_processed")
+    
+    transformations = config.get("transformations", {})
+    offsets = transformations.get("offsets", [(0.0, 0.0)])
+    rotations = transformations.get("rotations", [0])
+    scales = transformations.get("scales", [1.0])
+    
+    commands = []
+    skipped_cities = []
+    
+    if not os.path.exists(base_path):
+        logger.error(f"Base path does not exist: {base_path}")
+        return
+    
+    def is_city_completed(city_folder, city_path):
+        csv_file = os.path.join(city_path, 'data_useful.csv')
+        if not os.path.exists(csv_file):
+            return False, "No data_useful.csv found"
+        
+        graphs_dir = os.path.join(city_path, 'graphs')
+        dem_dir = os.path.join(city_path, 'dem')
+        dem_file = os.path.join(dem_dir, f"{city_folder}_dem.tif")
+        stats_file = os.path.join(graphs_dir, 'graph_stats.csv')
+        
+        expected_pickles = (
+            ['graph_original.pkl']
+            + [f'graph_translated_{i}.pkl' for i in range(1, len(offsets))]
+            + [f'graph_rot_{a}.pkl'        for a in rotations]
+            + [f'graph_scale_x_{s}.pkl'    for s in scales]
+            + [f'graph_scale_y_{s}.pkl'    for s in scales]
+        )
+        pickle_files = [os.path.join(graphs_dir, fn) for fn in expected_pickles]
+        
+        if not is_dem_complete(dem_file):
+            return False, "DEM file missing or incomplete"
+        
+        if not os.path.exists(stats_file):
+            return False, "graph_stats.csv missing"
+        
+        missing_pickles = [p for p in pickle_files if not os.path.exists(p)]
+        if missing_pickles:
+            return False, f"Missing {len(missing_pickles)} pickle files"
+        
+        return True, "All files present"
+    
+    for city_folder in sorted(os.listdir(base_path)):
+        city_path = os.path.join(base_path, city_folder)
+        if os.path.isdir(city_path):
+            is_completed, reason = is_city_completed(city_folder, city_path)
+            
+            if is_completed:
+                skipped_cities.append(city_folder)
+                logger.info(f"Skipping {city_folder}: already completed")
+            else:
+                csv_file = os.path.join(city_path, 'data_useful.csv')
+                if os.path.exists(csv_file):
+                    tag = f"dem_{city_folder}"
+                    command = f"runlog -t 336:00 -m 450 -c 8 -j {tag} python dem_extractor.py --city {city_folder} --workers 8 --no-maps"
+                    commands.append(command)
+                    logger.info(f"Generated command for city: {city_folder} (reason: {reason})")
+                else:
+                    logger.warning(f"Skipping {city_folder}: not a valid city folder (no data_useful.csv)")
+    
+    if not commands and not skipped_cities:
+        logger.warning(f"No valid city folders found in {base_path}")
+        return
+    
+    if output_file:
+        with open(output_file, 'w') as f:
+            f.write("#!/bin/bash\n")
+            f.write("# Generated runlog commands for cities that need processing\n")
+            f.write(f"# Generated on: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"# Base path: {base_path}\n")
+            f.write(f"# Cities to process: {len(commands)}\n")
+            f.write(f"# Cities already completed: {len(skipped_cities)}\n\n")
+            for cmd in commands:
+                f.write(cmd + '\n')
+        logger.info(f"Wrote {len(commands)} commands to {output_file}")
+    else:
+        print("\n# Generated runlog commands for cities that need processing:")
+        print("# Usage: Copy and paste these commands or save to a script file")
+        print("# Each command will process one city with 8 workers and no map generation")
+        print(f"# Generated on: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"# Base path: {base_path}")
+        print()
+        for cmd in commands:
+            print(cmd)
+        print()
+        print(f"# Cities to process: {len(commands)}")
+        print(f"# Cities already completed: {len(skipped_cities)}")
+        if skipped_cities:
+            print(f"# Skipped cities: {', '.join(skipped_cities)}")
+        print()
+        
+        if not commands:
+            print("# All cities are already fully processed!")
+            print("# No commands generated.")
+
+def main(api_key=None, example_city=None, workers=None, produce_maps=False):
     config_path = "/home/fbellisardi/code/topolity/tools/conf/conf_extractor.json"
     with open(config_path, 'r') as f:
         config = json.load(f)
@@ -476,11 +615,11 @@ def main(api_key=None, example_city=None):
     cmap = plt.get_cmap('Set1', cnumber)
 
     if example_city:
-        process_folder(example_city, base_path, offsets, rotations, scales, cmap, api_key)
+        process_folder(example_city, base_path, offsets, rotations, scales, cmap, api_key, workers, produce_maps)
     else:
         for city_folder in os.listdir(base_path):
             if os.path.isdir(os.path.join(base_path, city_folder)):
-                process_folder(city_folder, base_path, offsets, rotations, scales, cmap, api_key)
+                process_folder(city_folder, base_path, offsets, rotations, scales, cmap, api_key, workers, produce_maps)
 
 
 if __name__ == '__main__':
@@ -489,5 +628,17 @@ if __name__ == '__main__':
                         help='OpenTopography API key (overrides config)')
     parser.add_argument('--city', type=str,
                         help='Example city folder to process (overrides config)')
+    parser.add_argument('--workers', type=int, default=None,
+                        help='Number of worker processes (use 1 to disable multiprocessing)')
+    parser.add_argument('--no-maps', action='store_true',
+                        help='Disable HTML map generation (now disabled by default for performance - use map_generator.py separately)')
+    parser.add_argument('-gc','--generate-commands', action='store_true',
+                        help='Generate runlog commands for all cities and exit')
+    parser.add_argument('--commands-output', type=str,
+                        help='File to write generated commands to (if not specified, prints to stdout)')
     args = parser.parse_args()
-    main(args.api_key, args.city)
+    
+    if args.generate_commands:
+        generate_runlog_commands(output_file=args.commands_output)
+    else:
+        main(args.api_key, args.city, args.workers, produce_maps=not args.no_maps)
