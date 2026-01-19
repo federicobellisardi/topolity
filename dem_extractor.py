@@ -99,6 +99,32 @@ def load_metropolis_bbox(json_path, city_key):
 
     return Polygon(swapped_coords)
 
+def load_fua_polygon(gpkg_path, bbox_poly, city_key=None):
+    try:
+        fua_gdf = gpd.read_file(gpkg_path)
+    except Exception as e:
+        logger.warning(f"Could not read FUA file {gpkg_path}: {e}")
+        return None
+    try:
+        fua_4326 = fua_gdf.to_crs("EPSG:4326")
+    except Exception:
+        # If CRS is missing, assume it's already 4326
+        fua_4326 = fua_gdf
+    # Filter FUAs intersecting the bbox polygon
+    try:
+        candidates = fua_4326[fua_4326.intersects(bbox_poly)]
+    except Exception as e:
+        logger.warning(f"Failed spatial filter on FUA with bbox for {city_key}: {e}")
+        candidates = gpd.GeoDataFrame(columns=fua_4326.columns, geometry="geometry", crs=fua_4326.crs)
+    if candidates.empty:
+        logger.warning(f"No FUA geometry intersecting bbox for {city_key}; falling back to bbox polygon")
+        return None
+    try:
+        poly = candidates.geometry.union_all()
+    except Exception:
+        poly = candidates.unary_union
+    return poly
+
 def assign_altitudes(G, dem_reader):
     dem_gdf = dem_reader.get_pixel_centroids()
     dem_coords = np.vstack((dem_gdf.geometry.y.values, dem_gdf.geometry.x.values)).T
@@ -191,7 +217,7 @@ def scale_graph(G, scale_factor, axis='both', origin=None):
     nx.set_node_attributes(G, attr)
     return G
 
-def process_folder(folder, base_path, offsets, rotations, scales, cmap, api_key, workers=None, produce_maps=True):
+def process_folder(folder, base_path, offsets, rotations, scales, cmap, api_key, workers=None, produce_maps=True, use_fua=False, fua_path=None):
     logger.info(f"[{folder}] Starting processing folder")
     folder_path = os.path.join(base_path, folder)
     csv_file    = os.path.join(folder_path, 'data_useful.csv')
@@ -252,9 +278,35 @@ def process_folder(folder, base_path, offsets, rotations, scales, cmap, api_key,
     logger.info(f"[{folder}] DEMReader initialized for {dem_file}")
 
     city_poly = load_metropolis_bbox(json_bbox, folder)
-    logger.info(f"[{folder}] City polygon loaded with bounds {city_poly.bounds}")
-    
-    minx, miny, maxx, maxy = city_poly.bounds
+    logger.info(f"[{folder}] City bbox polygon loaded with bounds {city_poly.bounds}")
+
+    # Optionally replace bbox with GHSL FUA polygon intersecting bbox
+    poly_for_graph = city_poly
+    if use_fua:
+        default_fua = "/home/fbellisardi/code/topolity/vars/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg"
+        fua_gpkg = fua_path or (default_fua if os.path.exists(default_fua) else None)
+        if fua_gpkg is None:
+            # Try alternative known locations
+            alt_paths = [
+                "/home/fbellisardi/code/topolity/data/extra/ghs_fua_v1/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg",
+                "/home/fbellisardi/code/data/extra/ghs_fua_v1/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg",
+                "/home/fbellisardi/code/twitter/extra/ghs_fua_v1/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg",
+            ]
+            for p in alt_paths:
+                if os.path.exists(p):
+                    fua_gpkg = p
+                    break
+        if fua_gpkg and os.path.exists(fua_gpkg):
+            fua_poly = load_fua_polygon(fua_gpkg, city_poly, folder)
+            if fua_poly is not None:
+                poly_for_graph = fua_poly
+                logger.info(f"[{folder}] Using FUA polygon from {os.path.basename(fua_gpkg)} with bounds {poly_for_graph.bounds}")
+            else:
+                logger.warning(f"[{folder}] FUA polygon not found; continuing with bbox polygon")
+        else:
+            logger.warning(f"[{folder}] FUA gpkg not available; continuing with bbox polygon")
+
+    minx, miny, maxx, maxy = poly_for_graph.bounds
 
     raw_dir = "/data/workspaces/fbellisardi/land"
     shp_file = os.path.join(raw_dir, "ne_10m_land.shp")
@@ -263,7 +315,7 @@ def process_folder(folder, base_path, offsets, rotations, scales, cmap, api_key,
 
     land_shp = os.path.join(folder_path, 'land', f'{folder}_clipped_land.shp')
 
-    bbox_gdf = gpd.GeoDataFrame({'geometry': [city_poly]},crs="EPSG:4326")
+    bbox_gdf = gpd.GeoDataFrame({'geometry': [poly_for_graph]},crs="EPSG:4326")
     clipped = gpd.overlay(land_global, bbox_gdf, how='intersection')
     os.makedirs(os.path.join(folder_path, 'land'), exist_ok=True)
     clipped.to_file(land_shp)
@@ -597,7 +649,7 @@ def generate_runlog_commands(base_path=None, output_file=None):
             print("# All cities are already fully processed!")
             print("# No commands generated.")
 
-def main(api_key=None, example_city=None, workers=None, produce_maps=False):
+def main(api_key=None, example_city=None, workers=None, produce_maps=False, use_fua=False, fua_path=None):
     config_path = "/home/fbellisardi/code/topolity/tools/conf/conf_extractor.json"
     with open(config_path, 'r') as f:
         config = json.load(f)
@@ -615,11 +667,11 @@ def main(api_key=None, example_city=None, workers=None, produce_maps=False):
     cmap = plt.get_cmap('Set1', cnumber)
 
     if example_city:
-        process_folder(example_city, base_path, offsets, rotations, scales, cmap, api_key, workers, produce_maps)
+        process_folder(example_city, base_path, offsets, rotations, scales, cmap, api_key, workers, produce_maps, use_fua, fua_path)
     else:
         for city_folder in os.listdir(base_path):
             if os.path.isdir(os.path.join(base_path, city_folder)):
-                process_folder(city_folder, base_path, offsets, rotations, scales, cmap, api_key, workers, produce_maps)
+                process_folder(city_folder, base_path, offsets, rotations, scales, cmap, api_key, workers, produce_maps, use_fua, fua_path)
 
 
 if __name__ == '__main__':
@@ -636,9 +688,13 @@ if __name__ == '__main__':
                         help='Generate runlog commands for all cities and exit')
     parser.add_argument('--commands-output', type=str,
                         help='File to write generated commands to (if not specified, prints to stdout)')
+    parser.add_argument('--use-fua', action='store_true',
+                        help='Restrict processing polygon to GHSL FUA intersecting the city bbox')
+    parser.add_argument('--fua-path', type=str,
+                        help='Path to GHSL FUA .gpkg (optional; defaults to known locations)')
     args = parser.parse_args()
     
     if args.generate_commands:
         generate_runlog_commands(output_file=args.commands_output)
     else:
-        main(args.api_key, args.city, args.workers, produce_maps=not args.no_maps)
+        main(args.api_key, args.city, args.workers, produce_maps=not args.no_maps, use_fua=args.use_fua, fua_path=args.fua_path)

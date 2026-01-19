@@ -20,290 +20,499 @@
 
 \begin{document}
 
-\title{Inferring Urban Morphology through Gravitational Work Minimization of Twitter-Derived Trajectories}
+\title{Energetic optimality in the spatial organization of cities}
 
 \author{Federico Bellisardi}\email{fbellisardi@ifisc.uib-csic.es}\affiliation{Instituto de F\'{\i}sica Interdisciplinar y Sistemas Complejos IFISC (CSIC-UIB), Campus UIB, 07122 Palma de Mallorca, Spain}
 
-\author{Enrique Cano Su\"nen}
-\affiliation{Universidad de Zaragoza, Spain}
+\author{Enrique Cano Su\~n\'en}
+\affiliation{Human Openware Research Lab (HOWLab), Engineering Research Institute of Aragon (I3A), University of Zaragoza (UZ), Spain}
 
-\author{Ana Ruiz Varona}
+\author{Ana Ruiz-Varona}
 \affiliation{Universidad San Jorge, Zaragoza, Spain}
 
 \author{Jos\'e J. Ramasco}\email{jramasco@ifisc.uib-csic.es}
 \affiliation{Instituto de F\'{\i}sica Interdisciplinar y Sistemas Complejos IFISC (CSIC-UIB), Campus UIB, 07122 Palma de Mallorca, Spain}
 
 \maketitle
+\textbf{Abstract} 
 
-\textbf{Abstract}
+Cities emerge at the interface between human mobility and the physical landscape, yet whether their spatial form reflects an energetic optimum remains unresolved. Here we test a simple principle: \emph{the observed configuration of a city minimizes the gravitational work required to move across its terrain}. We reconstruct origin-destination flows from geolocated Twitter activity and compute, for several world cities, the total uphill work incurred by those flows when routed on the street network and sampled over high-resolution digital elevation models. To isolate spatial from topological effects, we generate ensembles of counterfactual cities by applying pure geometric transformations—translations and rotations—that preserve network connectivity but alter the embedding with respect to the terrain. Across all cases, the empirical layouts consistently yield the lowest gravitational energy investment relative to their transformed counterparts. The distribution of segment-level work is highly unequal and well approximated by a heavy-tailed law, with a small fraction of links concentrating most of the elevational burden. These findings indicate that urban morphology is not arbitrary: it is compatible with an energetic optimization principle coupling network structure, mobility demand and topography. Beyond a theoretical insight, this framework offers a quantitative tool to assess planning scenarios, resilience to relocations and the energy consequences of urban expansion.
 
 \smallskip
-
 \section*{Introduction}
 
-\section*{Methods}
-\subsection*{Twitter OD Data Reconstruction}
+The spatial organization of cities reflects a complex interplay of historical contingencies, land markets, path dependence and planning decisions. Equally pervasive, though harder to quantify, is the role of topography: settlements preferentially occupy plains, align with valleys and avoid steep barriers. While case studies and qualitative arguments abound, a general, testable statement about the energetic imprint of terrain on urban form has remained elusive. Here we advance and validate a parsimonious hypothesis: \emph{the spatial embedding of a city is such that, given its mobility demand, the displacement potential energy (gravitational work) required to traverse it is minimized.}
+
+We formulate this principle in operational terms. Human movement generates flows between origins and destinations; when those flows are mapped to paths on a street network draped over a real digital elevation model (DEM), every uphill metre carries an energetic cost. Aggregating uphill increments along the routes of all trips yields a city-level measure we term \emph{gravitational energy investment}, $W_{\text{total}}$—the total energetic expenditure required to sustain the observed mobility patterns against elevation gradients. This quantity couples three ingredients: (i) the geometry of the terrain, (ii) the connectivity of the network and (iii) the intensity and pattern of mobility. If urban morphology has adapted—through planned interventions or long-run self-organization—to reduce this cost, then the observed configuration should outperform plausible geometric alternatives.
+
+Two challenges stand in the way of such a test. First, we need consistent, city-scale flows to represent mobility demand. We address this by reconstructing origin-destination (OD) matrices from multi-year geolocated Twitter activity, separating working days and holidays to capture contrasted mobility regimes. Second, we must decouple topology (how streets connect) from embedding (where they lie relative to the terrain). We do so by generating counterfactual ensembles via pure affine transformations—translations, rotations—that leave the graph's adjacency intact while repositioning it over the DEM. In this design, any change in $W_{\text{total}}$ is attributable exclusively to the city's placement and orientation with respect to elevation gradients.
+
+Applying this framework to diverse cities (including Barcelona, Madrid, Rome, Boston, Atlanta and Santiago de Chile) reveals two robust signatures. At the microscopic scale, segment-level uphill work is extremely heterogeneous: Lorenz curves and Gini coefficients show that a small subset of links accounts for a disproportionately large share of the total gravitational burden, consistent with heavy-tailed behaviour driven by steep corridors at urban fringes. At the macroscopic scale, the empirical configurations systematically minimize $W_{\text{total}}$ when compared to translated, rotated or rescaled replicas of the same network. Even modest displacements or re-orientations lead to appreciable penalties, while anisotropic scalings amplify costs dramatically (\textbf{NOTE: CITE})—evidence that cities occupy energetically favourable niches of their landscapes.
+
+These results advance a quantitative answer to the opening question: urban morphology is compatible with an energetic optimization principle. The interpretation is agnostic about mechanism—planning can exploit valleys and coastal plains; market forces can favour accessible parcels; incremental growth can canalise along low-work routes—yet the aggregate outcome is the same: a form that reduces the potential-energy footprint of everyday movement. The consequences are practical. By expressing $W_{\text{total}}$ in physical units and tying it to observable flows, the method becomes a diagnostic for evaluating alternative plans (e.g., new districts, network re-alignments), assessing the energetic vulnerability of cities to relocations or land-use shifts, and identifying a small set of high-work links whose mitigation (e.g., tunnels, lifts, dedicated transit) could deliver outsized gains in accessibility. In what follows we formalise the computation of gravitational work, describe the construction of OD flows and transformed ensembles, and present comparative evidence that the observed layouts of cities minimize displacement potential energy.
+
+
+\section*{Data and Methods}
+\subsection*{Mobility flows from geolocated social media data}
 
 \label{sec:twitter-data}
 
-% We based our analysis on geolocated Twitter data collected between 2015 and 2022 from more than fifty cities on every inhabited continent. Our aim was to convert these individual "check-ins" into coherent trajectories that reveal how people actually move through urban space. To achieve this, we extracted each tweet's spatial footprint - either a precise \texttt{POINT} coordinate (defined by a tuple of lat-lon coordinates) or a \texttt{POLYGON} bounding area (defined by 4 points vertices) - and reprojected all geometries into a single metric coordinate system, discarding any bounding polygons whose area exceeded 200 km$^2$. Timestamps were parsed and normalized to UTC, ensuring that every record was directly comparable regardless of local time zones or daylight-saving transitions. By reducing each tweet to its essential spatiotemporal components - where and when it occurred - we stripped away extraneous information and produce a lean, uniform dataset optimized for trajectory analysis. A representative sample of these processed records is shown in Table~\ref{tab:twitter-geometry-sample}.
-% \begin{table}[ht]
-%   \centering
-%   \scriptsize
-%   \setlength{\tabcolsep}{3pt}
-%   \begin{tabular*}{\textwidth}{@{\extracolsep{\fill}} l l p{10cm} @{} }
-%     \toprule
-%     \textbf{Datetime} & \textbf{User} & \textbf{Geo-localization} \\
-%     \midrule
-%     2015-01-02 17:32:00 & \texttt{USER\_1} & \texttt{POINT (1.155948 41.087918)} \\
-%     2015-01-05 10:05:20 & \texttt{USER\_2} & \texttt{POINT (2.156102 41.384112)} \\
-%     2015-01-09 21:13:17 & \texttt{USER\_3} & \texttt{POINT (2.161144 41.391157)} \\
-%     2015-01-15 10:00:55 & \texttt{USER\_4} & \texttt{POINT (2.186301 41.379876)} \\
-%     2017-03-25 09:12:44 & \texttt{USER\_5} & \texttt{POLYGON ((12.625949 41.796313, 12.625949 41.852161, 12.704790 41.852161, 12.704790 41.796313, 12.625949 41.796313))} \\
-%     2017-04-01 08:19:12 & \texttt{USER\_6} & \texttt{POLYGON ((13.282624 41.513575, 13.282624 41.618567, 13.381348 41.618567, 13.381348 41.513575, 13.282624 41.513575))} \\
-%     \bottomrule
-%   \end{tabular*}
-%   \caption{Example records from the Twitter dataset, showing for each tweet the UTC timestamp, an anonymized user identifier, and its geospatial footprint—either as a precise POINT coordinate or as a POLYGON bounding area.}
-%   \label{tab:twitter-geometry-sample}
-% \end{table}
+Next, we confronted the challenge of separating genuine human movement from automation, one-off events, and artifacts.  We began by identifying accounts whose activity pace exceeded three posts per hour; such high-frequency behavior almost always reflects bots, live-event streams, or institutional feeds rather than individual movements.  Once those accounts were removed, we discarded any remaining users with fewer than three total posts, since a single hop or a pair of points cannot trace a meaningful path.  Finally, even plausible streams could hide implausible leaps: we computed, for each consecutive pair of posts, the straight-line distance in meters and the elapsed time in hours, derived an implied velocity, and eliminated any segments exceeding 900 km/h—a threshold that filtered out multi-account profiles, often corporate or organizational actors, ensuring our analysis focused solely on individual users.
 
-Next, we confronted the challenge of separating genuine human movement from automation, one-off events, and artifacts.  We begun by identifying accounts whose activity pace exceeded three posts per hour; such high-frequency behavior almost always reflects bots, live-event streams, or institutional feeds rather than individual movements.  Once those accounts were removed, we discarded any remaining users with fewer than three total posts, since a single hop or a pair of points cannot trace a meaningful path.  Finally, even plausible streams could hide implausible leaps: we computed, for each consecutive pair of posts, the straight-line distance in meters and the elapsed time in hours, derive an implied velocity, and eliminate any segments exceeding 900 km/h: this approach filtered out multi-account profiles—often corporate or organizational actors—ensuring our analysis focused solely on individual users. 
-
-This three-stage cleansing leaft us with a curated collection of trajectories that credibly represent human mobility. 
-% Figure~\ref{fig:rej_uids_by_reason} illustrates the percentage of rejected user identified by rejection reason across four representative cities, with colors denoting categories: pink for fewer than three tweets, blue for suspected bot activity, and green for excessive speed.
-
-% \begin{figure}[!htbp]
-%   \centering
-%   \begin{subfigure}[b]{0.45\textwidth}
-%     \centering
-%     \includegraphics[width=0.8\linewidth]{rejected/rejected_uids_by_reason_pie_madrid.png}
-%     \caption{Madrid, Spain (286\,760 UIDs)}
-%     \label{fig:rej_madrid}
-%   \end{subfigure}
-%   \hfill
-%   \begin{subfigure}[b]{0.45\textwidth}
-%     \centering
-%     \includegraphics[width=0.8\linewidth]{rejected/rejected_uids_by_reason_pie_mexico.png}
-%     \caption{Mexico City, Mexico (420\,898 UIDs)}
-%     \label{fig:rej_mexico}
-%   \end{subfigure}
-
-%   \vspace{1em}
-
-%   \begin{subfigure}[b]{0.45\textwidth}
-%     \centering
-%     \includegraphics[width=0.8\linewidth]{rejected/rejected_uids_by_reason_pie_paris.png}
-%     \caption{Paris, France (552\,465 UIDs)}
-%     \label{fig:rej_paris}
-%   \end{subfigure}
-%   \hfill
-%   \begin{subfigure}[b]{0.45\textwidth}
-%     \centering
-%     \includegraphics[width=0.8\linewidth]{rejected/rejected_uids_by_reason_pie_saopaulo.png}
-%     \caption{Sao Paolo, Brazil (428\,885 UIDs)}
-%     \label{fig:rej_saopaolo}
-%   \end{subfigure}
-
-%   \caption{Percentage of UIDs rejected for each reason, expressed as a proportion of the total UIDs removed in each selected city (showing the total number of users removed from each city).  
-%     Colors denote categories: \emph{pink} = less than 3 tweets in 8 years; \emph{blue} = suspected bot activity; \emph{green} = excessive speed.}
-%   \label{fig:rej_uids_by_reason}
-% \end{figure}
+This three-stage cleaning left us with a curated collection of trajectories that credibly represent human mobility. To further refine our dataset and focus on local residents rather than transient visitors, we applied an additional temporal filter: we retained only users who had posted from the same city for at least two months. This residence criterion ensures that the observed mobility patterns reflect the sustained, routine movements of the urban population rather than short-term tourism or sporadic visits, thereby grounding our analysis in the stable mobility demand that shapes everyday urban accessibility. 
 
 Having distilled the data to its essence, we superimposed a regular, square grids—of side length 1000 m—over the projected extent of each city. Then we computed the overall bounding box of the reprojected tweets and subdivided it into integer-indexed cells, yielding a uniform lattice that simplifies both analysis and interpretation. An efficient spatial index then assigned each tweet to its corresponding cell with the following logic: precise POINT geometries mapped directly via integer division, while POLYGON footprints were first intersected with the grid and then resolved—by selecting the cell of maximum overlap. In this way, every tweet had been endowed with a unique cell identifier and an associated confidence score, enabling consistent, multiscale trajectory analysis.  
 
-\begin{figure*}[t!]
+\begin{figure}[t!]
 \centering
-\subfloat[\textbf{Working days }]{
-    \includegraphics[width=0.48\textwidth]{images/bcn_heatmap_wd.png}
-    \label{fig:heatmap_wd}
-}
-\hfill
-\subfloat[\textbf{Holidays}]{
-    \includegraphics[width=0.48\textwidth]{images/bcn_heatmap_hd.png}
-    \label{fig:heatmap_hd}
-}
-\caption{\textbf{Origin-destination flow heatmaps for Barcelona.}
-\textbf{a–b}, Working days (\textbf{a}) and holidays (\textbf{b}) OD flow heatmaps, illustrating the spatial distribution of user movements across the city. The color intensity of each cell corresponds to the normalized number of transitions between origin-destination pairs, with a color bar indicating the scale. The axes represent the grid cell indices along the x and y directions, respectively.}
-\label{fig:flow_heatmap}
-\end{figure*}
+\includegraphics[width=8cm]{images/barcelone_od_flows_heatmap.pdf}
 
-The final transformation converted these cell-tagged trajectories into origin-destination flows.  We label each date as a working day or holiday—either by consulting a calendar API—and then, for each user, chronologically sequence their visited cells.  Every successive pair of cells contributed one unit to the corresponding entry in an OD matrix.  Summing over all users and days of the same type yielded two comprehensive flow tables—one for workdays and one for holidays—where each row specified an origin cell, a destination cell, and the total count of observed transitions.  These OD matrices form the empirical backbone of our gravitational-work minimization, enabling us to probe how subtle perturbations to the urban fabric—through translations, rotations, or scalings—reshape the uphill effort embedded in real human journeys. In Figure \ref{fig:flow_heatmap} we show an example of the OD matrix flows reconstructucted for the city of Barcelona for the working days (left panel a) and holidays (right panel b).
+\caption{\textbf{Cumulative origin-destination mobility flows in the Barcelona Functional Urban Area (FUA).}
+Heatmap of OD transitions aggregated across both working days and holidays. 
+Color intensity corresponds to the logarithmic scale of total flows, highlighting major corridors, dense activity hubs, and structurally persistent displacement patterns. 
+The black boundary delineates the official Functional Urban Area (FUA), which serves as the spatial reference domain in our analysis.}
+\label{fig:heatmap_bcn}
+\end{figure}
 
+The final stage of the pipeline converts cell-level trajectories into origin-destination (OD) flows. Each timestamped record is assigned to a spatial cell, and dates are classified as either working days or holidays using an external calendar. For each user, we then chronologically sequence their visited cells; every successive pair of cells contributes one unit to the corresponding entry in an OD matrix. Aggregating across all users produces two distinct OD tables—one capturing mobility during working days and one during holidays—each listing origin cell, destination cell, and total observed transitions.
 
-\subsection*{Study Areas and City Boundaries}
+For visualization, we also consider the aggregate of the two matrices (workdays + holidays), which highlights persistent structural mobility patterns independent of temporal modality. Figure~\ref{fig:heatmap_bcn} shows this cumulative OD flow field for the Barcelona Functional Urban Area (FUA), where the color intensity encodes the logarithmic magnitude of total transitions and the FUA boundary provides the spatial reference frame for interpretation.
+
+\subsection*{Digital elevation models and terrain representation}
+\label{sec:elevation-data}
+
+To estimate the elevation profile of the network, we used the Shuttle Radar Topography Mission (SRTM) digital elevation model (DEM) data \cite{SRTM-OpenTopography}.  SRTM is a near-global, high-resolution (90 m) DEM acquired by radar aboard the Space Shuttle Endeavour in February 2000 under a joint NASA-NGA effort.  We retrieved Version 3 products (OT Collection ID OT.042013.4326.1; short names \texttt{SRTM\_GL3}, \texttt{SRTM\_GL1}, \texttt{SRTM\_GL1\_Ellip}) via OpenTopography's raster service.  For each city, we downloaded the tile covering its FUA bounding box and then reprojected the DEM from WGS84 (EPSG:4326) into the metric CRS used for the Twitter-derived trajectories, ensuring that all elevation sampling and spatial operations were fully consistent.
+The SRTM DEM provides a continuous surface of elevation values, which is crucial for accurately computing the gravitational work associated with commuting mobility. The DEM was used to sample elevation values along the road segments of the commuters network, allowing us to compute the uphill work required for each trajectory.
+
+\subsection*{Case study cities and spatial boundaries}
 \label{sec:city-boundaries}
 
 \begin{figure*}[t!]
 \centering
-\setlength{\tabcolsep}{0pt}
+\def\svgwidth{0.95\textwidth}
+  \input{images/fig2.pdf_tex}
 
-\newlength{\FIGH}\setlength{\FIGH}{0.40\textheight}
-\newlength{\ROWSEP}\setlength{\ROWSEP}{1.2ex}
-\newlength{\RONE}\setlength{\RONE}{0.34\FIGH}
-\newlength{\RTWO}\setlength{\RTWO}{0.34\FIGH}
-\newlength{\RTHR}\setlength{\RTHR}{0.34\FIGH}
-
-\begin{minipage}[t]{0.30\textwidth}
-  \vspace{0pt}
-  \subfloat[\textbf{Overview}\label{fig:overview}]{
-    \includegraphics[height=\FIGH]{images/cities.png}
-  }
-\end{minipage}%
-\hfill
-\begin{minipage}[t]{0.70\textwidth}
-  \vspace{0pt}
-
-  \subfloat[\textbf{Rome}\label{fig:rome}]{
-    \includegraphics[height=\RONE]{images/dem/rome_dem.png}
-  }\hfill
-  \subfloat[\textbf{Madrid}\label{fig:madrid}]{
-    \includegraphics[height=\RONE]{images/dem/madrid_dem.png}
-  }\\[\ROWSEP]
-
-  \centering
-  \subfloat[\textbf{Boston}\label{fig:boston}]{
-    \includegraphics[height=\RTWO]{images/dem/boston_dem.png}
-  }\\[\ROWSEP]
-
-  \noindent
-  \subfloat[\textbf{(e) Santiago}\label{fig:santiago}]{
-    \includegraphics[height=\RTHR, width=5cm]{images/dem/santiago_dem.png}
-  }\hfill
-  \subfloat[\textbf{(f) Barcelona}\label{fig:barcelona}]{
-    \includegraphics[height=\RTHR]{images/dem/barcelona_dem.png}
-  }
-
-\end{minipage}
-
-\caption{\textbf{Topography of selected cities.}
-Global overview on the left (\textbf{a}); local maps on the right in a 2+1+2 layout (\textbf{b–f}).}
+\caption{\textbf{Study areas and topography.} (\textbf{a}) Geographic location of the cities analyzed. (\textbf{b-f}) City-level digital elevation models (DEMs); color scale indicates elevation (m). The dashed outline marks the box that includes the Functional Urban Area (FUA) used as the study boundary.}
 \label{fig:city_map}
 \end{figure*}
 
+For this study, we selected a set of cities that represent different urban landscapes and mobility patterns. The cities included in our analysis are Rome (Italy), Madrid (Spain), Barcelona (Spain), Boston (USA), Atlanta (USA) and Santiago de Chile (Chile). These cities were chosen based on the availability of high-quality Twitter data, diverse topographical features, and varying urban morphologies. The geographic locations of the selected cities are shown in Figure~\ref{fig:city_map}a, while Figures~\ref{fig:city_map}b-f display the corresponding digital elevation models (DEMs) for each city, highlighting their unique topographical characteristics.
 
-For this study, we selected a set of cities that represent different urban landscapes and mobility patterns. The cities included in our analysis are shown in Figure~\ref{fig:city_map} and include Rome (Italy), Madrid (Spain), Barcelona (Spain), Boston (USA) and Santiago del Chile (Chile)..
-
-
-
-
-The geographic boundaries of each city were defined using the spatial dataset delineates the boundaries of Functional Urban Areas (FUA) of Urban Centres , which was obtained from the European Commission's Joint Research Centre (JRC) \cite{jrc-fua}. This dataset provides a comprehensive and standardized definition of urban areas across Europe and beyond, allowing for consistent comparisons of urban morphology and mobility patterns. In the Supplementary Material (see Appendix \ref{sec:city-characteristics}), we provide a table summarizing the key characteristics of each city, including population size, area, and the number of Twitter-derived trajectories analyzed. Moreover, we show the boundaries of the FUA for each city in Figure~\ref{fig:fua_boundaries}, which illustrates the spatial extent of the area as defined by the FUA dataset. Each figure represents the functional connections between the urban core and surrounding areas, which are crucial for understanding urban morphology and mobility patterns.
+The geographic boundaries of each city were defined using the spatial dataset delineates the boundaries of Functional Urban Areas (FUA) of Urban Centres , which was obtained from the European Commission's Joint Research Centre (JRC) \cite{jrc-fua}. This dataset provides a comprehensive and standardized definition of urban areas across Europe and beyond, allowing for consistent comparisons of urban morphology and mobility patterns. In the Supplementary Material, we provide a table summarizing the key characteristics of each city, including population size, area, and the number of Twitter-derived trajectories analyzed. Moreover, we show the boundaries of the FUA for each city in Figure~\ref{fig:city_map}, which illustrates the spatial extent of the area as defined by the FUA dataset. Each figure represents the functional connections between the urban core and surrounding areas, which are crucial for understanding urban morphology and mobility patterns.
 
 The FUA boundaries were used to extract the relevant urban network data from OpenStreetMap (OSM) and to define the spatial extent for the analysis of Twitter-derived trajectories. The FUA boundaries were reprojected to match the coordinate system of the Twitter-derived trajectories, ensuring that all spatial operations were consistent.
 
+\subsection*{Geometric transformations: Testing topographic sensitivity}
+\label{sec:transformations}
 
+A central hypothesis of this study is that the spatial organization of cities is not arbitrary but rather reflects an emergent adaptation to their topography, minimizing the energetic cost required to move across their terrain. 
+In particular, we postulate that the real spatial embedding of the urban network tends to reduce the gravitational energy investment associated with mobility when compared to geometrically transformed configurations of the same topology. 
+To test this hypothesis, we conducted a set of controlled spatial transformations of the city networks, modifying their geometric placement while preserving the connectivity structure of the underlying graph. 
+This approach allows us to disentangle purely topological factors (how the network connects) from spatial ones (where the network lies in relation to elevation gradients).
 
-\subsection*{Gravitational Work Computation}
-% Define work minimization, edge sampling, and uphill work aggregation.
-To quantify the topographic cost of movement, we first acquired a high-resolution SRTM digital elevation model (DEM) for each city, as described in Sec. %\ref{sec:elevation-data}.
-
-At this point, we discretized each road-segment into evenly spaced sample points at a fixed interval $\Delta s = 10\,$m.  For a given edge $e$, of the graph $G$, of total length $L_e$, we set the total number of elevation-sampling points placed along edge $e$ as
+Let the city be represented as a directed graph $G = (V, E)$, with each node $v_i \in V$ positioned at coordinates $(x_i, y_i)$ in the projected metric plane. 
+We applied two types of geometric transformations—translations and rotations—defined by the affine relation
 \[
-    N_e \;=\;\Bigl\lceil \frac{L_e}{\Delta s}\Bigr\rceil + 1,
-    \]
-    and defined the sampling distances
-    \[
-    s_i \;=\;\frac{i}{N_e - 1}\,L_e,
-    \quad i = 0,1,\dots,N_e-1.
+\mathbf{x}' = \mathbf{A} \mathbf{x} + \mathbf{b},
 \]
-Each point $\mathbf{x}_i$ was obtained by interpolating the linestring geometry of $e$ at distance $s_i$, then projected to geographic coordinates via the DEM's affine transform.  We queryed the DEM at $\mathbf{x}_i$ (using rasterio's sampling routine) to retrieve an elevation value $z_i$.  The resulting elevation profile for edge $e$ is therefore the ordered sequence
+where $\mathbf{x} = (x, y)^{\mathsf{T}}$, $\mathbf{A}$ is a $2\times2$ transformation matrix, and $\mathbf{b}$ is a translation vector. 
+While $\mathbf{A}$ and $\mathbf{b}$ alter the spatial embedding of the network, the edge set $E$ and adjacency structure remain fixed, ensuring that only the alignment with the topography changes.
+
+To ensure that only physically meaningful transformations were considered, we restricted the analysis to configurations in which all transformed nodes remained over land. 
+Transformations causing any part of the network to extend beyond the terrestrial domain—such as nodes falling into the sea or outside the continental boundary—were automatically discarded. 
+This filtering guarantees that every evaluated configuration represents a feasible urban embedding within the physical geography of the study area.
+
+\paragraph*{Translation.}
+To evaluate the dependence of gravitational work on the absolute positioning of the city, we shifted the entire network by a constant vector $(\Delta x, \Delta y)$:
 \[
-\bigl\{(\mathbf{x}_i, z_i)\bigr\}_{i=0}^{N_e-1},
+\begin{pmatrix} x' \\[3pt] y' \end{pmatrix} =
+\begin{pmatrix} x + \Delta x \\[3pt] y + \Delta y \end{pmatrix}.
 \]
-which provided the detailed vertical trace needed for accurate uphill-work computations. 
+This transformation preserves both distances and orientations, altering only the region of the digital elevation model (DEM) over which the network is projected. 
+By displacing the same network structure to higher or lower altitudes, we test whether the real location of the city corresponds to a position of minimal gravitational effort.
+
+\paragraph*{Rotation.}
+Next, to investigate orientation effects, each network was rotated around its centroid $(x_0, y_0)$ by an angle $\theta$:
+\[
+\begin{pmatrix} x' \\[3pt] y' \end{pmatrix} =
+\begin{pmatrix} x_0 \\[3pt] y_0 \end{pmatrix} +
+\begin{pmatrix}
+\cos\theta & -\sin\theta \\[3pt]
+\sin\theta & \cos\theta
+\end{pmatrix}
+\begin{pmatrix} x - x_0 \\[3pt] y - y_0 \end{pmatrix}.
+\]
+This rotation keeps all distances constant but changes the alignment between road directions and elevation gradients. 
+If the real network orientation results in a lower gravitational energy investment compared to rotated counterparts, it implies that cities tend to evolve orientations that exploit natural topographic channels to reduce energetic cost.
+
+% \paragraph*{Scaling.}
+% Finally, to test sensitivity to network scale, we applied uniform rescaling about the centroid:
+% \[
+% \begin{pmatrix} x' \\[3pt] y' \end{pmatrix} =
+% \begin{pmatrix} x_0 \\[3pt] y_0 \end{pmatrix} +
+% s \begin{pmatrix} x - x_0 \\[3pt] y - y_0 \end{pmatrix},
+% \]
+% where $s$ is the scaling factor. 
+% This operation compresses or expands the spatial footprint of the city while maintaining its topology. 
+% By rescaling the network relative to the underlying terrain, we can determine how the density and extension of the built structure modulate the energetic cost of movement.
+
+\medskip
+Figure~\ref{fig:transformations} presents two representative examples of the geometric transformation experiments performed to assess how the spatial embedding of urban networks affects the gravitational energy investment. 
+In each panel, the red network corresponds to a transformed configuration overlaid on the original one (in gray). 
+These transformations include translations and rotations applied to the entire network while preserving the topological structure of the graph. 
+By systematically altering the network's position and orientation relative to the underlying terrain, we quantify the extent to which the real spatial organization of each city minimizes the energetic cost associated with elevation changes.
+
+In this analysis, the gravitational energy investment $W_{\text{total}}$ was computed for both the observed and transformed networks, allowing direct comparison of their energetic efficiency. 
+Across all tested variants, we consistently find that the empirical urban configurations yield the lowest gravitational energy investment, suggesting that real-world cities occupy spatial embeddings that are inherently optimized—either by design or evolution—to reduce the energetic cost of movement.
+
+Figure~\ref{fig:transformations} illustrates this behavior for two case studies.
+(\textbf{a})~Barcelona: the translated network (red), obtained by shifting the entire graph by $\Delta \mathrm{lon} = -0.05$ and $\Delta \mathrm{lat} = +0.05$ degrees while preserving its topology. 
+This translation produces a mean elevation increase from $111\,\mathrm{m}$ to $243\,\mathrm{m}$ and a new maximum altitude of $1084\,\mathrm{m}$, revealing the strong sensitivity of gravitational work to positional offsets in heterogeneous terrain. 
+(\textbf{b})~Santiago: the network rotated by $45^{\circ}$ around its centroid (red) compared with the original configuration (gray). 
+This rotation raises the mean elevation from $559\,\mathrm{m}$ to $620\,\mathrm{m}$ and the maximum elevation to $2734\,\mathrm{m}$, demonstrating that even purely geometric reorientations can substantially alter the gravitational burden of mobility. 
+Together, these results indicate that the actual spatial layouts of cities are not arbitrary, but rather reflect an adaptive balance between connectivity, geography, and energetic efficiency. 
+
+\begin{figure*}[t!]
+\centering
+\def\svgwidth{.8\textwidth}
+  \input{images/trans_matrix.pdf_tex}
+\caption{\textbf{Effects of geometric transformations on the spatial configuration of urban networks.}
+(\textbf{a})~Barcelona — the transformed network (red) corresponds to a translation obtained by shifting the entire graph by $\Delta \mathrm{lon} = -0.05^{\circ}$ and $\Delta \mathrm{lat} = +0.05^{\circ}$ while preserving its topology.
+(\textbf{b})~Santiago — the transformed network (red) results from a $45^{\circ}$ rotation around the network centroid, shown against the original configuration (gray).
+Both examples illustrate how simple geometric manipulations alter the spatial embedding of the network without changing its topological structure.}
+\label{fig:transformations}
+\end{figure*}
 
 
+\subsection*{Computing gravitational energy investment from elevation profiles}
+\begin{figure*}[t]
+    \centering
+    \subfloat[{Elevation profile of a sampled road segment.}\label{fig:elevation_profile}]{
+        \includegraphics[width=8cm]{images/profile.pdf}
+    }
+    \hfill
+    \subfloat[{Gravitational work analysis per city.}\label{fig:per_city_log}]{
+        \includegraphics[width=8cm]{images/gravity_work_analysis/cum_distribution.pdf}
+    }
+    \caption{\textbf{Gravitational work computation and analysis.} 
+    (\textbf{a}) Elevation profile of a sampled road segment, illustrating the method for computing uphill work. 
+    The line represents elevation as a function of distance along the road, with red sections indicating uphill stretches ($\Delta z > 0$) and black sections indicating downhill portions ($\Delta z < 0$). 
+    This elevation sampling procedure is applied to all edges in the network to compute the uphill work required for movement. 
+    (\textbf{b}) Cumulative distribution of gravitational work per city, showing the fraction of road segments with work values below a given threshold. 
+    The curves reveal that in all cities, the majority of segments (60--80\%) require minimal uphill work, while a small fraction of steep corridors concentrate disproportionately large energetic costs. 
+    Santiago exhibits a more gradual rise, indicating greater spread in work distribution, whereas Barcelona, Rome, Madrid, and Boston cluster together with steeper initial ascents, reflecting higher concentration of low-work segments.}
+    \label{fig:two_images}
+\end{figure*}
+
+To quantify the topographic cost of movement, we first retrieved high-resolution Shuttle Radar Topography Mission (SRTM) digital elevation models (DEMs) for each city. 
+The road network within the corresponding Functional Urban Area (FUA) boundary was extracted from OpenStreetMap (OSM) and represented as a directed graph $G = (V,E)$, where $V$ denotes the set of nodes (intersections) and $E$ the set of edges (road segments). 
+Each edge $e \in E$ was associated with its geometric linestring representation and physical length $L_e$. 
+Elevation along each edge was sampled from the DEM at regular spatial intervals, producing a sequence of elevation values that describe the vertical profile of the segment. 
+This sampling step was essential for capturing fine-scale variations in slope and computing the corresponding energetic cost of movement. 
+Figure~\ref{fig:two_images}(a) illustrates an example of such a sampled elevation profile, where uphill and downhill portions are clearly distinguished.
+
+Each road segment was discretized into evenly spaced points separated by $\Delta s = 10\,\mathrm{m}$. 
+For a segment of total length $L_e$, the number of elevation samples was defined as
+\[
+N_e = \Bigl\lceil \frac{L_e}{\Delta s} \Bigr\rceil + 1,
+\]
+with corresponding sampling distances
+\[
+s_i = \frac{i}{N_e - 1}\,L_e,
+\quad i = 0,1,\dots,N_e-1.
+\]
+Each sampling point $\mathbf{x}_i$ was interpolated along the linestring geometry at distance $s_i$ and reprojected into the DEM coordinate reference system. 
+Elevation values $z_i$ were obtained by querying the DEM at each $\mathbf{x}_i$ using \texttt{rasterio}. 
+The resulting ordered sequence $\{(\mathbf{x}_i, z_i)\}_{i=0}^{N_e-1}$ provided a detailed vertical trace for each edge, forming the basis for the uphill-work computation.
+
+The gravitational work required to traverse each edge was computed by integrating the uphill component of the elevation profile $h_e(s)$. 
+For a continuous slope, the energetic cost of traversing edge $e$ is given by
+\[
+W_e = m g \int_0^{L_e} \max\!\left(0, \frac{dh_e}{ds}\right) ds,
+\]
+where $m$ represents the effective mass of a moving agent, $g$ is the gravitational acceleration, and the $\max$ operator ensures that only positive slopes (uphill motion) contribute to the work. 
+In discrete form, this integral becomes
+\[
+W_e \approx m g \sum_i \max(0, h_{i+1} - h_i),
+\]
+which accumulates only the elevation gains along the sampled profile. 
+This formulation isolates the true topographic resistance experienced during upward motion and filters out energy recovered on descent, consistent with the assumption of non-recoverable gravitational work.
+
+To evaluate city-wide patterns, the computed edge-level works $W_e$ were integrated into a routing analysis across all origin-destination (OD) pairs. 
+Shortest paths $P^*(O,D)$ were determined using Dijkstra's algorithm, with edge weights defined by physical distance rather than energy cost, thereby emulating realistic route choice while allowing the corresponding gravitational penalty to be computed as a post-processing step. 
+For each OD pair, the total uphill work was calculated as the sum of the segment-wise contributions $W_e$ along the chosen path.
+
+Finally, we aggregated the total gravitational work across all OD pairs, weighting each by the observed mobility flow $F_{OD}$ derived from the Twitter-based OD matrices. 
+The overall energetic demand of the urban system is thus expressed as
+\[
+W_{\text{total}} = \sum_{(O,D)} F_{OD} \sum_{e \in P^*(O,D)} W_e,
+\]
+which quantifies the total gravitational work required to sustain the observed mobility within each city. 
+This formulation bridges the microscopic description of individual elevation profiles with the macroscopic flow structure of urban mobility, enabling direct comparison across different topographies and mobility regimes.
+
+Figure~\ref{fig:two_images}(b) reports the aggregated gravitational work distributions for all studied cities. 
+The distributions exhibit a pronounced heavy-tailed behavior, indicating that most road segments entail very low energetic cost, while a small fraction concentrate disproportionately large uphill work. 
+This pattern reflects the heterogeneous topography and network morphology of urban environments, where flat areas dominate but steep corridors account for a substantial share of the cumulative elevation cost. 
+Across all cities, the distributions are well described by a lognormal model, with Gini coefficients ranging from $0.77$ in Boston to $0.86$ in Madrid and an average value of $G \simeq 0.85$, confirming a consistent and strong inequality in the spatial allocation of topographic work.
+
+% \begin{figure*}[t!]
+% \centering
+% \def\svgwidth{0.8\textwidth}
+%   \input{images/fig4.pdf_tex}
+% \caption{\textbf{Spatial concentration and inequality of gravitational work.}
+% (\textbf{a}) Barcelona, (\textbf{b}) Rome, and (\textbf{c}) Santiago map the segment-level \emph{uphill} gravitational work: high-work links (warm tones) are sparse and organize into a few steep corridors, whereas the vast majority of links contribute negligibly.
+% (\textbf{d}) Lorenz curves quantify this heterogeneity, showing that a small fraction of road segments accounts for a disproportionately large share of total uphill work, consistent with a heavy-tailed lognormal distribution.}
+% \label{fig:eterogeneity}
+% \end{figure*}
+
+\begin{figure*}[t!]
+\centering
+\subfloat[\textbf{Barcelona}]{
+    \includegraphics[width=0.48\textwidth]{images/segment_work/barcelone_segment_work.pdf}
+    \label{fig:segment_work_barcelona}
+}
+\hfill
+\subfloat[\textbf{Lorenz curves}]{
+    \includegraphics[width=0.48\textwidth]{images/gravity_work_analysis/lorenz_curves.pdf}
+    \label{fig:lorenz_curves}
+}
+\caption{\textbf{Spatial concentration and inequality of gravitational work.}
+(\textbf{a}) Barcelona maps the segment-level \emph{uphill} gravitational work: high-work links (warm tones) are sparse and organize into a few steep corridors, whereas the vast majority of links contribute negligibly.
+(\textbf{b}) Lorenz curves quantify this heterogeneity, showing that a small fraction of road segments accounts for a disproportionately large share of total uphill work, consistent with a heavy-tailed lognormal distribution.}
+\label{fig:eterogeneity}
+\end{figure*}
+
+The spatial patterns displayed in Figure~\ref{fig:eterogeneity} further illustrate the intrinsic heterogeneity of gravitational work across urban networks. 
+Panel (\textbf{a}) shows the segment-level uphill work distribution for Barcelona, where the majority of street segments contribute only marginally to the total energetic effort, while a limited number of links—typically located in peripheral or topographically complex zones—concentrate most of the uphill work. 
+High-work connections (shown in warm tones) cluster around the elevated outskirts, forming steep corridors that dominate the energetic structure of the city. 
+The spatial pattern reveals that most of the urban fabric imposes minimal gravitational cost, while a few arterial routes crossing hilly areas absorb a disproportionate share of the total energetic burden.
+
+Panel (\textbf{b}) quantifies these disparities through Lorenz curves for all studied cities, highlighting that the top 10\% of road segments contribute between 60\% and 70\% of the total gravitational work, depending on the city. 
+The consistency of this inequality across geographically diverse cases suggests that elevation imposes a universal constraint on urban mobility, irrespective of scale or climate. 
+This concentration of energetic effort implies that accessibility in cities is not only shaped by spatial layout but also by the uneven distribution of gravitational barriers, where a limited set of steep connections disproportionately governs the overall energetic landscape.
 
 
+\section*{Results and Discussion}
 
+Our central question is whether the spatial configuration of cities reflects an energetic optimization principle. 
+To answer this, we computed the gravitational energy investment $W_{\text{total}}$ required to sustain observed mobility patterns and compared the empirical urban layouts to geometrically transformed variants. 
+For each configuration, $W_{\text{total}}$ was defined as the cumulative uphill work over all network edges, weighted by origin-destination flows derived from geolocated Twitter data for both working days and holidays. 
+This measure quantifies the energetic cost that urban morphology imposes on daily movement through real elevation fields.
 
+\vspace{0.5em}
+\noindent\textbf{Fine-scale sensitivity around the empirical configuration.}  
+We first tested whether observed city layouts correspond to true local energy minima or merely occupy favorable regions within a broader energetic basin.  
+For Santiago de Chile and Atlanta, we generated dense ensembles of small geometric perturbations: rotations from $\pm5^{\circ}$ to $\pm20^{\circ}$ around the network centroid, and translations in cardinal directions (North-South and West-East) at 50\,m intervals up to 1.5\,km.  
+These fine-grid transformations probe the immediate energetic landscape while preserving network topology.  
+Figure~\ref{fig:fine_grid_cities} reveals that even modest displacements produce substantial increases in gravitational work.  
+In both cities, the empirical configuration consistently occupies the absolute minimum.  
+For Santiago, rotational perturbations of just $\pm5^{\circ}$ increase $W_{\text{total}}$ by up to 91\%, while $\pm20^{\circ}$ rotations impose penalties up to 160\%.  
+Translational shifts exhibit comparable sensitivity: displacements as small as 500\,m raise work by 4-24\%, and 1.5\,km shifts produce penalties of 20-121\% depending on direction.  
+Atlanta shows parallel behavior despite its gentler Piedmont topography.  
+These results demonstrate that real urban networks sit at sharp local minima of the energetic surface—their spatial embeddings are finely tuned to minimize the effort required for daily mobility across their specific terrain.
 
+\begin{figure*}[t!]
+\centering
+\subfloat[\textbf{Santiago}]{
+    \includegraphics[width=\textwidth]{images/g_investment_santiago.pdf}
+}
 
+\subfloat[\textbf{Atlanta}]{
+    \includegraphics[width=\textwidth]{images/g_investment_atlanta.pdf}
+}
+\caption{\textbf{Fine-scale energetic sensitivity analysis around the empirical configurations.}
+For each city, three panels show g-energy investment as a function of: (\textbf{Left})~rotation angle around the network centroid; (\textbf{Middle})~translation distance in the North-South direction; (\textbf{Right})~translation distance in the West-East direction.
+The red star marks the original configuration in all panels.
+Both cities' empirical layouts consistently yield the lowest g-energy investment among all tested perturbations, demonstrating that the observed spatial embeddings occupy local minima of the energetic landscape regardless of topographic context.}
+\label{fig:fine_grid_cities}
+\end{figure*}
 
+\begin{figure*}[t!]
+\centering
+\subfloat[\textbf{Atlanta}]{
+    \includegraphics[width=\textwidth]{images/fig6a.pdf}
+    \label{fig:atlanta_barplot}
+}
 
+\vspace{1cm}
 
+\subfloat[\textbf{Santiago}]{
+    \includegraphics[width=\textwidth]{images/santiago_combined_figure.pdf}
+    \label{fig:santiago_barplot}
+}
+\caption{\textbf{Energetic sensitivity of urban networks to geometric transformations.}
+(\textbf{a})~Atlanta analysis showing total gravitational work across selected transformations.  
+(\textbf{b})~Santiago analysis showing total gravitational work across selected transformations.
+The original configuration consistently minimizes g-energy investment relative to rotational (R) and translational (T) variants.
+In both cities, the empirical layouts systematically occupy gravitationally optimal states, with the original configuration yielding the minimum total work.
+Rotations produce moderate increases (typically 10-50\%), while translations impose larger penalties, especially when displacing networks away from topographically favorable positions.
+These results demonstrate that urban morphology follows an energetic optimization principle, minimizing the effort required for mobility over heterogeneous terrain.}
+\label{fig:work_stats}
+\end{figure*}
 
-\subsection*{Copresence dynamic network}
+\noindent\textbf{Energetic sensitivity to geometric transformations.}  
+Beyond fine-scale perturbations, we tested a broader range of transformations to characterize the full energetic landscape. 
+Figure~\ref{fig:work_stats} presents results for Santiago de Chile and Atlanta—two cities from different continents with contrasting topographies. 
+In both cases, the original network configuration (highlighted in red) systematically minimizes the gravitational energy investment $W_{\text{total}}$, while all transformed variants—rotations and translations in multiple directions—impose substantially higher energetic costs. 
+Because network topology remains fixed, these variations isolate purely spatial effects: the consequences of repositioning the same connectivity structure relative to elevation gradients.
 
-A first question to address is 
+For \textbf{Santiago de Chile} (Figure~\ref{fig:work_stats}), the energetic hierarchy is pronounced.  
+The empirical configuration occupies the absolute minimum, while rotations (R) from $\pm0.5^{\circ}$ to $\pm30^{\circ}$ and translations (T) of 50\,m to 1.5\,km in cardinal directions all incur penalties.  
+Small rotations ($\pm0.5^{\circ}$ to $\pm5^{\circ}$) increase $W_{\text{total}}$ by 1-91\%; larger rotations can impose penalties exceeding 150\%, while translations depend strongly on direction due to the Andean gradient.  
+The boxplot distribution (Figure~\ref{fig:work_stats}) confirms that translations impose the greatest median penalties, followed by rotations, with the original configuration standing apart as the unique optimum.  
+This pattern reflects Santiago's geographic setting: positioned at the foot of the Andes, the city's east-west alignment along the valley minimizes elevation changes, while any rotation or displacement toward steeper gradients amplifies energetic costs.
 
-\begin{figure}
-%\includegraphics[width=\columnwidth]{Fig1_v4.pdf}
-\caption{\textbf{London Heathrow Airport aggregated copresence network of one month data. a} Sketch ... .}\label{fig1}
-%RG: 2DO: panel C and D are too small to be read
-\end{figure}
+\textbf{Atlanta} (Figure~\ref{fig:work_stats}) exhibits parallel behavior despite a distinct topographic context.  
+Situated on the rolling Piedmont plateau rather than confronting a dramatic mountain front, Atlanta nonetheless demonstrates the same optimization signature.  
+The bar plot places the original layout at the minimum, with rotations and translations increasing $W_{\text{total}}$ by 15-100\% depending on magnitude and direction.  
+Boxplots show that translations again induce the largest penalties, consistent with displacing the network from favorable drainage patterns and gentler slopes.  
+The convergence across these two cities—one constrained by Andean foothills, the other by subtler piedmont relief—suggests that energetic optimization operates as a general principle, adapting urban form to whatever landscape is present rather than depending on specific terrain characteristics.
 
+\vspace{0.5em}
+\noindent\textbf{Statistical patterns across transformation types.}  
+The boxplot analyses in Figure~\ref{fig:work_stats} provide statistical confirmation of these findings.  
+Each boxplot aggregates all tested variants within a transformation class (original, rotation, translation), revealing the range, median, and interquartile spread of $W_{\text{total}}$ across the ensemble.
 
+Across both cities, a robust statistical signature emerges.  
+The \textit{original} configuration consistently exhibits the absolute minimum work—not merely a favorable value, but the global optimum among all tested alternatives.  
+Rotations introduce moderate variability, typically raising $W_{\text{total}}$ by 10-50\%, while translations display wider dispersion and larger median penalties, often exceeding the original by factors of two or more.  
+The separation between distributions is statistically decisive, with minimal overlap between original and transformed ensembles.  
+This pattern demonstrates that empirical city layouts are energetically exceptional: they do not arise by chance but occupy sharp local minima carved by the interaction of network structure, mobility demand, and topographic relief.
 
- 
-\subsection*{EBlablaba}
+\vspace{0.5em}
+\noindent\textbf{An emergent energetic principle of urban morphology.}  
+Taken together, these results converge on a fundamental insight:  
+urban morphology is not arbitrary but reflects a systematic tendency toward gravitational work minimization.  
+Whether shaped by centuries of incremental growth, deliberate planning interventions, or self-organizing market forces, urban networks consistently adapt to the physical constraints of their terrain, occupying positions and orientations that reduce the cumulative energetic cost of daily movement.  
+Urban form thus emerges as the spatial expression of an optimization principle coupling human mobility patterns with topographic energy landscapes.  
+This principle operates across diverse geographic contexts—from the dramatic Andean foothills of Santiago to the subtle piedmont undulations of Atlanta—suggesting a universal constraint imposed by the physics of moving through elevation fields.
 
-The contact network is 
+\vspace{0.5em}
 
-\begin{table}[h!]
-\begin{center}
-\begin{tabular}{l*{3}{c}r}
-Name            & Explanation  &    Reference \\
-\hline
-SIR               &   Original SIR   &  \cite{mkhatshwa2010modeling} \\
-SEIR             &    SEIR for H1N1     & \cite{balcan2009seasonal} \\
-EBOLA               &   SEIR for EBOLA    &  \cite{gomes2014} \\
-SARS-Cov2:   &     SEIIR for SARS-Cov2     & \cite{2020didomenico} \\
-SIRR3               &   SIR double infectivity   &  \cite{mkhatshwa2010modeling} \\
-SIR30               &   SIR with 30' time scale & \cite{mkhatshwa2010modeling} \\
-\end{tabular}
-\caption{List of abbreviation for the epidemic models here considered and respective reference to the literature for the choice of the epidemic parameters.}
-\label{table:models}
-\end{center}
-\end{table}
+\subsection*{Evaluating densification scenarios: the Barcelona case}
 
-\subsection*{Spatial Immunization}
+The energetic minimization principle validated in the previous sections suggests a natural extension: if existing cities minimize gravitational work, can we quantify the differential energetic cost of concentrating future population growth in different locations \emph{within} the existing urban fabric?  
+To address this question, we developed a comparative framework that evaluates alternative densification scenarios by computing the total gravitational work required to sustain the mobility demand generated by adding a fixed number of new residents to strategically selected locations: one in the urban center, one in the foothills, one in the mountain periphery (Terrassa area), and one in the coastal periphery (Mataró area).  
+Unlike peripheral expansion, this approach focuses on \emph{infill growth}—intensification within existing boundaries—and tests whether the energetic principle can guide planning decisions about where to concentrate new development.
 
-The diseases mentioned
+The analysis proceeds in five steps.  
+First, we partition the urban area into a regular grid of 1000\,m $\times$ 1000\,m cells and extract current population from WorldPop 2020 constrained datasets \cite{worldpop}.  
+Each cell is assigned to its nearest node on the road network (extracted from OpenStreetMap) to enable routing calculations.  
+Second, we select a set of \emph{candidate test cells} distributed across the urban fabric—urban center, foothills, mountain periphery (Terrassa), and coastal periphery (Mataró)—representing distinct topographic and accessibility contexts.  
+The selection targets populated areas with varying distances from the geographic centroid and different elevations, ensuring geographic and topographic diversity.
 
+Third, for each candidate cell independently, we simulate the addition of a fixed number of new residents ($\Delta P = 25{,}000$ in our Barcelona case study) and compute the resulting mobility flows using a gravity model.  
+The gravity model assumes that trip generation from the test cell $i$ to all other populated cells $j$ follows
+\[
+F_{ij} = N_{\text{trips}} \cdot \frac{P_j^\alpha \exp(-d_{ij}/d_0)}{\sum_{k \neq i} P_k^\alpha \exp(-d_{ik}/d_0)},
+\]
+where $N_{\text{trips}} = 2 \Delta P$ represents daily trip production (two trips per person: outbound and return), $P_j$ is the population of destination cell $j$, $d_{ij}$ is the Euclidean intercell distance, and $d_0 = 25{,}000$\,m is the distance decay parameter.  
+This formulation distributes trips probabilistically across all destinations, with probability decaying exponentially with distance and scaling with destination population.
 
-\section*{Results}
+Fourth, we compute the \emph{total gravitational work} required to serve these trips by routing each origin-destination pair through the real road network.  
+For each OD pair $(i,j)$ with flow $F_{ij}$, we use Dijkstra's algorithm to find the shortest path $P^*(i,j)$ on the network (weighted by geometric length), then compute the uphill work along that path by summing the precomputed edge-level work $W_e$ for all edges $e \in P^*$.  
+Critically, we account for \emph{both outbound and return journeys}: each trip from cell $i$ to cell $j$ includes the path $i \to j$ and the reverse path $j \to i$, since residents must travel to destinations and return home.  
+The total work for adding new residents to test cell $i$ is therefore
+\[
+W_{\text{total}}^{(i)} = \sum_{j \neq i} F_{ij} \left( W_{\text{path}}(i \to j) + W_{\text{path}}(j \to i) \right),
+\]
+where $W_{\text{path}}(i \to j) = \sum_{e \in P^*(i,j)} W_e$ is the cumulative uphill work along the shortest path from $i$ to $j$, and the symmetric term accounts for the return trip.  
+This bidirectional formulation ensures that the energetic cost of a complete trip cycle is captured, recognizing that uphill segments on the outbound journey are traversed downhill on the return (and vice versa), but only uphill work contributes to the total energetic burden.
 
-\subsection*{Simplest model: SIR}
+Fifth, we compare $W_{\text{total}}^{(i)}$ across all candidate cells to identify which location minimizes the incremental gravitational work imposed by growth.  
+The cell with the lowest total work represents the energetically optimal site for concentrating the new population, while cells with higher work values impose greater long-term accessibility costs on the mobility system.
 
-\begin{figure}
-%\includegraphics[width=\columnwidth]{Fig2_v3.pdf}
-\caption{\textbf{Risk of contagion in space.} Cells in the airport area with a heatmap showing the fraction of contagions occurring in them when running the SIR model. In \textbf{a}, after one day of simulation and in \textbf{b} after two days. }\label{sirspac}
-\end{figure}  
+\begin{figure*}[t!]
+\centering
+\includegraphics[width=0.95\textwidth]{images/barcelone_comparative_map.pdf}
+\caption{\textbf{Comparative energetic cost of internal densification in Barcelona.}
+Map showing four strategically selected test cells (1000\,m $\times$ 1000\,m grid) where 25,000 new residents were hypothetically added, overlaid on the existing road network (small black dots) and OpenStreetMap basemap.  
+Each test cell is color-coded by its energetic efficiency ranking:
+\textbf{Blue} (Urban Center, 41.444$^\circ$N, 2.210$^\circ$E): most efficient location, requiring 6.28\,MJ total work (251\,J per resident), positioned in the dense coastal core of Barcelona with a weighted average trip distance of 8.2\,km and minimal elevation barriers;  
+\textbf{Yellow} (Foothills, 41.465$^\circ$N, 2.183$^\circ$E): second-ranked option, requiring 10.49\,MJ (+67\% relative to best), located on the initial slopes approaching the Collserola range with 9.4\,km weighted trip distance and moderate topographic penalties;  
+\textbf{Orange} (Coastal Periphery - Mataró, 41.539$^\circ$N, 2.435$^\circ$E): third-ranked, requiring 11.32\,MJ (+80\%), situated in the eastern coastal periphery near Mataró (34.2\,km from Barcelona's center) with 21.3\,km weighted trip distance;  
+\textbf{Red} (Mountain - Terrassa, 41.579$^\circ$N, 2.021$^\circ$E): least efficient, requiring 15.85\,MJ (+152\%), positioned in the mountain periphery near Terrassa (21.1\,km from center) with severe topographic barriers, elevated terrain, and 19.4\,km weighted trip distance.  
+The analysis reveals that the energetically optimal location is \emph{not} the cell at intermediate elevation or moderate distance from the core, but rather the one embedded in the dense urban center whose position minimizes the cumulative gravitational work across all induced mobility flows when routing through the actual road network and topography.  
+The Urban Center cell benefits from proximity to high-density neighborhoods, sea-level elevation (minimal uphill barriers), and full integration with the existing mobility structure.  
+In contrast, the Mountain cell (Terrassa area), despite housing significant population, incurs substantially higher work due to severe topographic barriers—residents must traverse the Collserola range to access Barcelona's core—and greater average distances to major activity centers.  
+This comparative framework demonstrates that the energetic optimization principle extends from explaining existing urban form to \emph{evaluating alternative growth scenarios}, providing a quantitative basis for identifying locations where densification aligns with the city's mobility-energy structure.}
+\label{fig:barcelone_comparative}
+\end{figure*}
 
-We start by studying the simplest epidemic model: the SIR, with only susceptible, ...
+We applied this framework to Barcelona, a city characterized by a dense coastal core and complex topography rising from the Mediterranean shoreline to the Collserola hills (elevations from $-2$\,m to 545\,m within the analyzed area).  
+The study domain encompasses 1,754 populated grid cells covering a total current population of approximately 4.83 million residents, connected by a road network of 18,329 nodes and 51,509 edges.  
+Figure~\ref{fig:barcelone_comparative} presents the results for four strategically selected test cells.
 
-\subsection*{SEIR family}
+The analysis reveals a clear energetic hierarchy.  
+The \textbf{Urban Center cell} (blue, 41.444$^\circ$N, 2.210$^\circ$E) emerges as the most energy-efficient location, requiring only 6.28\,MJ of total gravitational work to sustain the mobility of 25,000 new residents—equivalent to 251\,J per person per day or 126\,J per trip (accounting for both outbound and return journeys).  
+This cell, located in the heart of Barcelona's dense coastal core at near-sea-level elevation, benefits from proximity to major activity centers (weighted average trip distance of 8.2\,km), virtually no topographic barriers, and full integration with the existing mobility network.  
+New residents settling here generate short-distance trips to surrounding high-density neighborhoods within the flat coastal plain, minimizing both travel distances and elevation changes.
 
+In contrast, the \textbf{Foothills cell} (yellow, 41.465$^\circ$N, 2.183$^\circ$E), positioned on the initial slopes of the Collserola range, requires 10.49\,MJ—a 67\% penalty relative to the optimal Urban Center cell.  
+Despite moderate proximity to the core, this cell imposes higher work due to slightly longer weighted trip distances (9.4\,km) and the topographic penalty of elevation gain when accessing the coastal plain where most activity centers concentrate.  
+The \textbf{Coastal Periphery cell} (orange, 41.539$^\circ$N, 2.435$^\circ$E), located near Mataró 34.2\,km east of Barcelona's center, requires 11.32\,MJ (+80\%), driven by substantially longer average trip distances (21.3\,km weighted average) and weaker gravity-model attraction to the dense urban core—residents must traverse long coastal corridors to access central employment and services.  
+Finally, the \textbf{Mountain cell} (red, 41.579$^\circ$N, 2.021$^\circ$E) near Terrassa emerges as the least efficient option, requiring 15.85\,MJ (+152\%)—more than double the optimal Urban Center—due to severe topographic obstacles (Collserola range acts as a major barrier separating Terrassa from Barcelona's core), peripheral position (21.1\,km from center), and long weighted trip distances (19.4\,km).
 
-%\begin{figure}
-%\includegraphics[width=\columnwidth]{heatsupp/figbohseir.pdf}
-%\caption{\textbf{UV surface irradiation effect for SEIR. a} Outbreak probability per each value of irradiated surface. \textbf{b} Infections frequency per time slot. Per each time slot we count how many infections occurred. \textbf{c} Destinations affected. $N_i/N_0$ represents the relative infections over the UV-free infections per each destination. This plot depicts how fast a destination lowers its infected population by increasing the UV irradiated surface. \textbf{d} Infection targets composition. $I_i/I_0$ represents the average percentage of destinations composing the overall infections per each value of irradiated surface.}\label{seirout}
-%\end{figure}
+These results demonstrate that the energetically optimal location for densification is \emph{not necessarily the geometric center or elevated areas} of the metropolitan region, but rather the position that minimizes the cumulative gravitational work across the full network of mobility flows induced by growth.  
+The Urban Center cell's superiority reflects its embeddedness within Barcelona's existing high-density coastal fabric, where new residents integrate seamlessly into established mobility patterns at sea level without imposing long-distance or topographically costly trips.  
+Conversely, mountain locations (Terrassa) or distant coastal peripheries (Mataró)—even if hosting significant existing populations—incur substantial energy penalties due to the need to traverse major elevation barriers (Collserola range) or bridge long coastal distances to reach Barcelona's activity centers.
 
+The comparative framework rests on three core assumptions:  
+\textbf{(i)} mobility demand generated by new residents follows a gravity model calibrated to distance decay and destination population,  
+\textbf{(ii)} route choice minimizes geometric distance (Dijkstra's algorithm on length-weighted network), approximating realistic travel paths,  
+\textbf{(iii)} gravitational work accounts for uphill elevation changes along both outbound and return trips, isolating the topographic component of mobility cost while neglecting mechanical advantages of wheeled transport and downhill energy recovery.  
+While these assumptions abstract from behavioral factors (mode choice, trip chaining, amenity preferences), institutional constraints (zoning, land availability), and infrastructure effects (transit access, road capacity), they isolate the energetic core of settlement dynamics and provide a \emph{baseline reference} for planning.  
+Zones with low incremental work are those where densification aligns with the city's existing mobility structure and topographic constraints, whereas high-work zones indicate areas where infill would impose disproportionately high long-term accessibility costs.
 
+Beyond Barcelona, preliminary applications to Madrid, Rome, and Boston (Supplementary Material) reveal consistent patterns: in topographically diverse cities, incremental work differentiates strongly between flat/central zones and elevated/peripheral zones, producing sharp energetic hierarchies.  
+In flatter cities such as Madrid, differentiation is driven primarily by accessibility (distance to activity centers) rather than elevation, but the comparative principle remains operative.  
+These results suggest that the gravity-work framework extends naturally from \emph{explaining existing morphology} (validated in earlier sections) to \emph{evaluating alternative densification scenarios}, offering a generalizable, physics-grounded tool for anticipating the energetic consequences of population growth within established urban boundaries.
 
+\section*{Conclusion}
 
-\section*{Discussion and conclusions}
+Urban morphology is not arbitrary: our results demonstrate that cities systematically minimize the gravitational energy investment required to sustain their mobility patterns.
+By computing total uphill work across observed and geometrically transformed networks in multiple cities, we find that empirical layouts consistently outperform all tested alternatives, occupying sharp local minima of the energetic surface.
+This optimization principle holds across topographically diverse contexts—from Santiago de Chile at the Andean foothills to Atlanta on the rolling Piedmont—indicating that the energetic constraint operates independently of specific landscape characteristics.
 
+Three converging lines of evidence establish this conclusion.
+First, fine-scale perturbations reveal exceptional sensitivity: even 500\,m translations or $\pm5^{\circ}$ rotations increase $W_{\text{total}}$ by 27-272\%, confirming that cities are precisely tuned to their topographic niches.
+Second, segment-level work distributions are highly heterogeneous (Gini coefficients $\approx 0.85$), yet structurally consistent: a small fraction of steep links concentrates the energetic burden while most segments impose minimal gravitational cost.
+Third, extending the principle to forecast internal densification yields settlement probability patterns aligned with low-work, high-accessibility zones, demonstrating that the framework can guide forward-looking planning in addition to explaining observed morphology.
 
-In this work, we have shown how using a network approach it is possible to reduce the complexity of the spatial trajectory in Heathrow airport and encode them in a temporal network of copresences among different categories of users. Based on those networks, we run four different compartmental models from the literature to mimic the spreading of four different strains, namely SARS, H1N1, EBOLA and SARS-Cov2, each one with different epidemic parameters. From these simulations we are able to detect workers as the most exposed and infectious category of individuals inside the airport, independently of the virus under study. This is due to the fact that employees are the agents more often infected: they recurrently appear in the airport day after day and they come in contact with many passengers, but also colleagues, whereas passengers generally cross the area of the airport only for few hours before departure or after arrival. To fully describe the movements across the airport, we had to supersample the trajectories creating a standard day which is of course only an approximation of reality, but still these different behaviors hold true in our simulations. Second in the rank by infectiousness we find connecting passengers, since they are the travelers who spend more time inside the airport waiting for connections between a flight and the next. Restaurants, bars and in general relax areas are the places where most of the copresences (and contagions) happen and this is where indeed connecting travelers use to rest and stop for a long time waiting and interacting with employees. 
+The implications span both theory and practice.
+Theoretically, topography emerges as a persistent, quantifiable constraint on urban form—one that shapes spatial embedding across historical epochs and institutional contexts.
+The energetic optimization principle provides a parsimonious, physics-grounded explanation for regularities in urban morphology long noted qualitatively but rarely tested quantitatively.
+It complements economic, social, and political accounts of urban development by isolating the role of physical geography in delimiting viable configurations.
 
-By applying a policy of spatial immunization based on non-harmful UV lights or similar spatial immunization methods such as frequent cleaning and disinfection of surfaces, air filters, ozone, etc, to hygenize the area of terminals, we are able to decrease the effect of infectious droplets, aerosols and contaminated air or surfaces. By selecting the places to immunize and their number using infection hotspots as predicted by the models, it is possible to sensibly decrease the contagion probability and the intensity of outbreaks for every disease studied. In all of them there is a common attribute and it is that the characteristic times of the disease evolution, e.g., latency period, are longer than the period spent by most of the users in the airport. This makes possible that the simplest SIR model, in which only contagion events are relevant, is enough to produce an accurate estimation of the contagion hotspots valid for most diseases. Note that these hotspots are not only characterized by the concentration of people but by a balance between time spent and individual concentration: places as cafeterias, access points, etc, are the most critical hotspots to immunize. Still, the method is general and in the eventuality of considering a quick evolving disease the hotspots should be recalculated with an \textit{ad hoc} model.   
+From a practical standpoint, the gravitational work framework equips planners and policymakers with a diagnostic tool.
+Expressing accessibility in energy units rather than distance or time reveals where urban systems concentrate their energetic burdens and where targeted interventions—tunnels, elevators, transit corridors—could yield disproportionate gains.
+The internal densification analysis offers a baseline reference for growth scenarios: zones with low incremental work align with existing mobility structures and topographic constraints, while high-work zones signal locations where infill would impose excessive long-term accessibility costs.
 
-We include an analysis further disaggregating the average probability of traveling from each terminal of Heathrow to UK, European and Intercontinental destinations around the world. Thanks to this detailed information, we are able to estimate the average threat represented by the development of an outbreak in the airport for these three classes of destinations for any of the four types of virus. Our spatial immunization policy helps containing the menace of passengers getting infected in the terminals while traveling to other destinations, potentially delaying the massive seeding of new infected individuals from London to the rest of the world. Unfortunately, this policy seems to be less effective on workers, who exhibit a longer exposure to the virus with respect to passengers. This suggests that targeted vaccinations on the airport employees may further reduce the probability and even the severity of an outbreak within every strain scenario. However, when vaccination is not available, in all the cases we register an important decrease on the outbreak probability and on the total amount of infected among all the destinations and all the categories of individuals. This same approach finds immediate direct applications of a similar spatial immunization technique to many other buildings like hospitals, schools, universities, train stations and museums, potentially reducing the appearance of new and uncontrolled outbreaks even in the absence of vaccines. All these places share the common feature of having a large in and outflow of visitors and by a set of workers that appear in some areas of the infrastructure recurrently. This leads to strong heterogeneities in the location and duration of the contacts among visitors and between visitors and workers, which allows us to define a successful spatial immunization strategy based on a hospot analysis. 
+Important limitations warrant acknowledgment.
+Our gravity model of mobility demand is stylized, abstracting from mode choice, transit infrastructure, and behavioral heterogeneity.
+The treatment of elevation differences as uniformly contributing to energetic cost neglects the asymmetry of uphill versus downhill effort and the mechanical advantages of wheeled vehicles.
+Our focus on topographic components necessarily sets aside institutional factors (zoning, property rights), historical path dependence, and amenity-driven preferences that co-determine urban growth patterns.
+Future work should integrate these dimensions to test whether energetic optimization persists when controlling for alternative drivers of urban structure.
 
+Despite these caveats, the core finding is robust: cities systematically occupy energetically favorable positions within their landscapes.
+This opens multiple research directions.
+Can the principle predict not only where cities grow but also where they contract, as accessibility costs become prohibitive?
+How does the energetic landscape shift under climate change, sea-level rise, or infrastructure investment, and can we quantify urban resilience to such perturbations?
+Does energetic optimization extend to other networked systems embedded in physical space—supply chains, transportation corridors, utility grids—or is it specific to settlements shaped by daily mobility?
 
+Ultimately, this work demonstrates that the question "why do cities look the way they do?" admits a partial but rigorous answer grounded in physics.
+Urban form is not infinitely malleable but constrained by the energetic cost of traversing the terrain on which it sits.
+By making this constraint explicit and measurable, we provide a new lens for understanding the spatial organization of cities and a quantitative foundation for designing urban futures that balance growth, accessibility, and energetic sustainability.
 
 \section*{Data Availability Statement}
 
-Mobility data is available from Cuebiq through their Data for Good program (\url{https://www.cuebiq.com/about/data-for-good/}). Restrictions apply to the availability of this data, which was used under license for the current study.
+The datasets generated and analyzed during the current study are available from the corresponding author upon reasonable request. The OpenStreetMap road network data can be accessed via the OSMnx library (\url{https://osmnx.readthedocs.io/}). The Shuttle Radar Topography Mission (SRTM) digital elevation model (DEM) data are publicly available from OpenTopography (\url{https://doi.org/10.5069/G9445JDF}). The Twitter-based origin-destination mobility data were obtained under a data sharing agreement and are not publicly available; however, aggregated mobility patterns can be requested from the authors.
 
 \section*{Acknowledgements}
 
-M.M. acknowledges financial support of ... J.J.R. acknowledge funding from the project ...
 
 \section*{Author Contribution}
-To decide
+To be completed.
 
 \bibliographystyle{nature.bst}
 

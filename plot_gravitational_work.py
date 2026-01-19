@@ -4,7 +4,7 @@ Plotting module for gravitational work analysis.
 Contains all plotting functions separated from the main analysis code.
 
 Author: Federico Bellisardi
-Usage: python plot_gravitational_work.py -c tools/conf/conf_wheight.json --results-csv path/to/results.csv
+Usage: python plot_gravitational_work.py --city santiago
 """
 
 import os
@@ -1266,6 +1266,347 @@ def plot_grouped_transformation_comparison(groups, output_path):
     logger.info(f"Grouped transformation comparison plot saved to: {output_path}")
 
 
+def plot_transformation_boxplots(groups, output_path):
+    """
+    Plot boxplots to characterize the distribution of work across transformation groups.
+    
+    Args:
+        groups (dict): Dictionary with group names as keys and DataFrames as values
+        output_path (str): Path to save the plot
+    """
+    logger.info(f"Creating transformation boxplot characterization: {output_path}")
+    
+    # Prepare data for plotting - separate original from transformations
+    all_data = []
+    group_labels = []
+    is_original = []
+    colors = plt.cm.Set2(np.linspace(0, 1, len(groups)))
+    
+    for group_name, group_df in groups.items():
+        if len(group_df) > 0:
+            all_data.append(group_df['total_work'].values)
+            group_labels.append(group_name)
+            is_original.append(group_name == 'original')
+    
+    if not all_data:
+        logger.warning("No data to plot in transformation boxplots")
+        return
+    
+    # Create figure
+    fig, ax = plt.subplots(figsize=(12, 8))
+    
+    # Create boxplot only for non-original groups
+    positions = []
+    boxplot_data = []
+    boxplot_labels = []
+    point_positions = []
+    point_values = []
+    
+    pos_counter = 1
+    for i, (data, label, is_orig) in enumerate(zip(all_data, group_labels, is_original)):
+        if is_orig:
+            # For original, just plot as a point
+            point_positions.append(pos_counter)
+            point_values.append(data[0] if len(data) > 0 else 0)
+            positions.append(pos_counter)
+            boxplot_labels.append(label)
+        else:
+            # For transformations, add to boxplot data
+            boxplot_data.append(data)
+            positions.append(pos_counter)
+            boxplot_labels.append(label)
+        pos_counter += 1
+    
+    # Create boxplot for transformation groups only
+    if boxplot_data:
+        bp_positions = [p for p, is_orig in zip(positions, is_original) if not is_orig]
+        bp = ax.boxplot(boxplot_data, positions=bp_positions, patch_artist=True,
+                        notch=False, whis=1.5,
+                        showmeans=True, meanline=False,
+                        meanprops=dict(marker='D', markerfacecolor='red', 
+                                      markeredgecolor='darkred', markersize=8, alpha=0.8))
+    
+    # Color the boxes
+    color_idx = 0
+    for i, (patch, is_orig) in enumerate(zip(bp['boxes'], [is_original[j] for j in range(len(is_original)) if not is_original[j]])):
+        patch.set_facecolor(colors[color_idx + 1])  # Skip first color for original
+        patch.set_alpha(0.6)
+        patch.set_edgecolor('black')
+        patch.set_linewidth(1.2)
+        color_idx += 1
+    
+    # Plot original as a point
+    if point_positions:
+        ax.scatter(point_positions, point_values, s=200, c='#FFD700', 
+                  marker='*', edgecolors='black', linewidths=2, 
+                  zorder=5, label='Original', alpha=0.9)
+    
+    # Style medians
+    for median in bp['medians']:
+        median.set_color('darkblue')
+        median.set_linewidth(2.5)
+    
+    # Style whiskers and caps
+    for whisker in bp['whiskers']:
+        whisker.set_color('gray')
+        whisker.set_linewidth(1.2)
+        whisker.set_linestyle('--')
+    
+    for cap in bp['caps']:
+        cap.set_color('gray')
+        cap.set_linewidth(1.2)
+    
+    # Style fliers (outliers)
+    for flier in bp['fliers']:
+        flier.set_marker('o')
+        flier.set_markerfacecolor('lightcoral')
+        flier.set_markeredgecolor('darkred')
+        flier.set_markersize(5)
+        flier.set_alpha(0.5)
+    
+    # Add statistical annotations
+    for i, (group_name, data, pos, is_orig) in enumerate(zip(group_labels, all_data, positions, is_original), 1):
+        if is_orig:
+            # For original, just show the value
+            stats_text = f'n=1\nW={data[0]:.2e}'
+            ax.text(pos, data[0] * 1.15, stats_text, 
+                   ha='center', va='bottom', fontsize=8, 
+                   bbox=dict(boxstyle='round,pad=0.5', facecolor='gold', alpha=0.7, edgecolor='black'))
+        else:
+            # Calculate statistics for transformations
+            median_val = np.median(data)
+            mean_val = np.mean(data)
+            q1 = np.percentile(data, 25)
+            q3 = np.percentile(data, 75)
+            iqr = q3 - q1
+            
+            # Add text annotation with key statistics
+            stats_text = f'n={len(data)}\nμ={mean_val:.2e}\nM={median_val:.2e}\nIQR={iqr:.2e}'
+            ax.text(pos, ax.get_ylim()[1] * 0.95, stats_text, 
+                   ha='center', va='top', fontsize=8, 
+                   bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.7, edgecolor='gray'))
+    
+    # Set x-axis labels
+    ax.set_xticks(positions)
+    ax.set_xticklabels(boxplot_labels, rotation=45, ha='right')
+    
+    # Labels and formatting
+    ax.set_ylabel('Total Gravitational Work', fontsize=14, fontweight='bold')
+    ax.set_xlabel('Transformation Type', fontsize=14, fontweight='bold')
+    ax.set_title('Distribution of Gravitational Work Across Transformation Groups', 
+                fontsize=16, fontweight='bold', pad=20)
+    ax.tick_params(axis='x', rotation=45, labelsize=12)
+    ax.tick_params(axis='y', labelsize=11)
+    ax.grid(True, alpha=0.3, linestyle=':', axis='y')
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    
+    # Add legend
+    legend_elements = [
+        plt.Line2D([0], [0], marker='*', color='w', markerfacecolor='#FFD700',
+                  markeredgecolor='black', markersize=15, label='Original', linewidth=0),
+        plt.Line2D([0], [0], color='darkblue', linewidth=2.5, label='Median'),
+        plt.Line2D([0], [0], marker='D', color='w', markerfacecolor='red', 
+                  markeredgecolor='darkred', markersize=8, label='Mean'),
+        plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='lightcoral',
+                  markeredgecolor='darkred', markersize=5, label='Outliers')
+    ]
+    ax.legend(handles=legend_elements, loc='upper right', frameon=True, 
+             fancybox=True, shadow=True, fontsize=10)
+    
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    logger.info(f"Transformation boxplot characterization saved to: {output_path}")
+
+
+def plot_transformation_violinplots(groups, output_path):
+    """
+    Plot violin plots to characterize the distribution of work across transformation groups.
+    
+    Args:
+        groups (dict): Dictionary with group names as keys and DataFrames as values
+        output_path (str): Path to save the plot
+    """
+    logger.info(f"Creating transformation violin plot characterization: {output_path}")
+    
+    # Prepare data for plotting - separate original from transformations
+    all_data = []
+    group_labels = []
+    is_original = []
+    colors = plt.cm.Set2(np.linspace(0, 1, len(groups)))
+    
+    for group_name, group_df in groups.items():
+        if len(group_df) > 0:
+            # Convert to numpy array and ensure it's a 1D array of floats
+            data = np.asarray(group_df['total_work'].values, dtype=float).flatten()
+            all_data.append(data)
+            group_labels.append(group_name)
+            is_original.append(group_name == 'original')
+    
+    if not all_data:
+        logger.warning("No data to plot in transformation violin plots")
+        return
+    
+    # Create figure
+    fig, ax = plt.subplots(figsize=(12, 8))
+    
+    # Create violin plot only for non-original groups
+    positions = []
+    violin_data = []
+    violin_labels = []
+    violin_positions = []
+    point_positions = []
+    point_values = []
+    point_labels = []
+    
+    pos_counter = 1
+    for i, (data, label, is_orig) in enumerate(zip(all_data, group_labels, is_original)):
+        # Check if data has enough variance for violin plot (need at least 3 points and meaningful variance)
+        unique_values = len(np.unique(data))
+        std_dev = np.std(data)
+        mean_val = np.mean(data)
+        # Coefficient of variation to check if variance is meaningful relative to mean
+        cv = std_dev / mean_val if mean_val > 0 else 0
+        
+        has_variance = len(data) >= 3 and unique_values >= 3 and cv > 1e-6
+        
+        if is_orig or not has_variance:
+            # For original, single-point groups, or low-variance groups, plot as a point
+            point_positions.append(pos_counter)
+            point_values.append(data[0] if len(data) == 1 else np.mean(data))
+            point_labels.append(label)
+            positions.append(pos_counter)
+            violin_labels.append(label)
+            if not is_orig:
+                logger.info(f"Group '{label}': n={len(data)}, unique={unique_values}, std={std_dev:.2e}, cv={cv:.2e} - plotting as point")
+        else:
+            # For transformations with multiple points and variance, add to violin plot data
+            violin_data.append(data)
+            violin_positions.append(pos_counter)
+            positions.append(pos_counter)
+            violin_labels.append(label)
+            logger.info(f"Group '{label}': n={len(data)}, unique={unique_values}, std={std_dev:.2e}, cv={cv:.2e} - plotting as violin")
+        pos_counter += 1
+    
+    
+    # Create violin plot for transformation groups only (with multiple data points and variance)
+    if violin_data:
+        try:
+            # Simply try to plot - if it fails, we'll fall back to all points
+            parts = ax.violinplot(violin_data, positions=violin_positions, 
+                                 showmeans=True, showmedians=True,
+                                 widths=0.7)
+        
+            # Color the violin bodies
+            color_idx = 0
+            for pc in parts['bodies']:
+                pc.set_facecolor(colors[color_idx + 1])  # Skip first color for original
+                pc.set_alpha(0.6)
+                pc.set_edgecolor('black')
+                pc.set_linewidth(1.2)
+                color_idx += 1
+            
+            # Style medians
+            if 'cmedians' in parts:
+                parts['cmedians'].set_color('darkblue')
+                parts['cmedians'].set_linewidth(2.5)
+            
+            # Style means
+            if 'cmeans' in parts:
+                parts['cmeans'].set_color('red')
+                parts['cmeans'].set_linewidth(2.5)
+                parts['cmeans'].set_linestyle('--')
+            
+            # Style other elements
+            for key in ['cbars', 'cmaxes', 'cmins']:
+                if key in parts:
+                    parts[key].set_color('gray')
+                    parts[key].set_linewidth(1.2)
+        except Exception as e:
+            logger.warning(f"Failed to create violin plot: {e}. Falling back to points only.")
+            # If violin plot fails, convert all violin data to points
+            for vpos, vdata in enumerate(violin_data):
+                actual_pos = violin_positions[vpos] if vpos < len(violin_positions) else vpos + 1
+                if actual_pos not in point_positions:  # Avoid duplicates
+                    point_positions.append(actual_pos)
+                    point_values.append(np.mean(vdata))
+                    point_labels.append(f'group_{vpos}')    # Plot points for original and single-value groups
+    if point_positions:
+        # Use different colors/markers for original vs single-point transformations
+        for pos, val, label in zip(point_positions, point_values, point_labels):
+            if label == 'original':
+                ax.scatter([pos], [val], s=200, c='#FFD700', 
+                          marker='*', edgecolors='black', linewidths=2, 
+                          zorder=5, label='Original', alpha=0.9)
+            else:
+                # Single-point transformation group
+                ax.scatter([pos], [val], s=150, c='lightgray', 
+                          marker='o', edgecolors='black', linewidths=1.5, 
+                          zorder=5, alpha=0.7)
+    
+    # Add statistical annotations
+    annotation_counter = 0
+    for i, (group_name, data, pos, is_orig) in enumerate(zip(group_labels, all_data, positions, is_original), 1):
+        # Check if this group has variance
+        has_variance = len(data) > 1 and len(np.unique(data)) > 1 and np.std(data) > 0
+        
+        if is_orig or not has_variance:
+            # For original, single-point groups, or zero-variance groups, just show the value
+            value = data[0] if len(data) == 1 else np.mean(data)
+            if is_orig:
+                stats_text = f'n=1\nW={value:.2e}'
+                bg_color = 'gold'
+            else:
+                stats_text = f'n={len(data)}\nW={value:.2e}'
+                bg_color = 'lightgray'
+            ax.text(pos , value * 1.5, stats_text, 
+                   ha='center', va='bottom', fontsize=14, 
+                   bbox=dict(boxstyle='round,pad=0.5', facecolor=bg_color, alpha=0.7, edgecolor='black'))
+        else:
+            # Calculate statistics for transformations with distribution
+            median_val = np.median(data)
+            mean_val = np.mean(data)
+            std_val = np.std(data)
+            
+            # Add text annotation with key statistics
+            stats_text = f'n={len(data)}\nμ={mean_val:.2e}\nM={median_val:.2e}\nσ={std_val:.2e}'
+            ax.text(pos, ax.get_ylim()[1] * 0.95, stats_text, 
+                   ha='center', va='top', fontsize=14, 
+                   bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.7, edgecolor='gray'))
+            annotation_counter += 1
+    
+    # Set x-axis labels
+    ax.set_xticks(positions)
+    ax.set_xticklabels(violin_labels, rotation=45, ha='right')
+    
+    # Labels and formatting
+    ax.set_ylabel('Total Gravitational Work', fontsize=14, fontweight='bold')
+    ax.set_xlabel('Transformation Type', fontsize=14, fontweight='bold')
+    # ax.set_title('Distribution of Gravitational Work Across Transformation Groups (Violin Plot)', 
+    #             fontsize=16, fontweight='bold', pad=20)
+    ax.tick_params(axis='x', rotation=45, labelsize=12)
+    ax.tick_params(axis='y', labelsize=11)
+    ax.grid(True, alpha=0.3, linestyle=':', axis='y')
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    
+    # Add legend
+    legend_elements = [
+        plt.Line2D([0], [0], marker='*', color='w', markerfacecolor='#FFD700',
+                  markeredgecolor='black', markersize=15, label='Original', linewidth=0),
+        plt.Line2D([0], [0], color='darkblue', linewidth=2.5, label='Median'),
+        plt.Line2D([0], [0], color='red', linewidth=2.5, linestyle='--', label='Mean')
+    ]
+    ax.legend(handles=legend_elements, loc='upper left', frameon=True, 
+             fancybox=True, shadow=True, fontsize=14)
+    
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    logger.info(f"Transformation violin plot characterization saved to: {output_path}")
+
+
 def load_graph_variant(graphs_dir, variant_name):
     """
     Load a graph variant pickle file.
@@ -1702,6 +2043,14 @@ def main():
         # Generate grouped plots
         grouped_comparison_png = os.path.join(images_dir, 'grouped_transformation_comparison.png')
         plot_grouped_transformation_comparison(groups, grouped_comparison_png)
+        
+        # Generate boxplot characterization
+        boxplot_png = os.path.join(images_dir, 'transformation_boxplots.png')
+        plot_transformation_boxplots(groups, boxplot_png)
+        
+        # Generate violin plot characterization
+        violinplot_png = os.path.join(images_dir, 'transformation_violinplots.png')
+        plot_transformation_violinplots(groups, violinplot_png)
         
         # Create individual plots for each transformation group (excluding 'original')
         orig_df = groups.get('original', pd.DataFrame())
