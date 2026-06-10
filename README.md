@@ -1,6 +1,6 @@
 # Topolity
 
-Code for the paper *"Gravitational morphology of urban street networks"* (Bellisardi et al.).
+Code for the paper *"Mobility energetic balance frames spatial configuration of cities"* (Bellisardi et al.).
 
 The core hypothesis is that real cities tend to minimize the total gravitational work required for mobility: the original street network embedding sits at — or very close to — the energy minimum among all rigid translations, rotations, and scalings of the same graph.
 
@@ -10,8 +10,6 @@ The core hypothesis is that real cities tend to minimize the total gravitational
 pipeline_scripts/       legacy pipeline scripts (exploration)
 pipeline_production/    production pipeline used for the paper results
 python/                 analysis and figure scripts
-supplementary/          supplementary material (tex + python)
-paper/v2/               paper source (LaTeX)
 notebooks/              exploratory notebooks
 tools/                  utilities (bbox extraction, map rendering)
 ```
@@ -76,4 +74,4 @@ Raw data (OSM graphs, DEM files, WorldPop rasters, OD matrices) are stored outsi
 
 ## Authors
 
-Federico Bellisardi — bellisardi@gmail.com
+Federico Bellisardi — bellisardi@gmail.com - fbellisardi@ifisc.uib-csic.es
