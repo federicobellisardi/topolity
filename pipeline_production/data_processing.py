@@ -1,6 +1,6 @@
-"""
-author: Federico Bellisardi
-"""
+#!/usr/bin/env python3
+"""Data processing pipeline: graph generation and transformation."""
+
 
 import argparse
 import os
@@ -105,8 +105,11 @@ class DEMReader:
 
     def get_pixel_centroids(self, bbox=None):
         logger.info(f"Reading DEM from {self.dem_file}")
+        centroids = []
+        lats = []
+        lons = []
+        alts = []
         with rasterio.open(self.dem_file) as src:
-            _crs = src.crs
             if bbox:
                 bbox_geom = [box(*bbox)]
                 image, transform = mask(src, bbox_geom, crop=True)
@@ -115,26 +118,19 @@ class DEMReader:
                 elevation = src.read(1, masked=True)
                 transform = src.transform
 
-        # Vectorised: select valid pixels in one numpy call (avoids per-pixel Python loop)
-        valid = ~np.ma.getmaskarray(elevation)
-        row_idx, col_idx = np.where(valid)
-
-        # Affine transform applied as numpy broadcast (no Python iteration)
-        # For a north-up raster: x = c + a*(col+0.5),  y = f + e*(row+0.5)
-        # General case includes b and d terms (skew/rotation) for correctness.
-        xs = (transform.c
-              + transform.a * (col_idx + 0.5)
-              + transform.b * (row_idx + 0.5))
-        ys = (transform.f
-              + transform.d * (col_idx + 0.5)
-              + transform.e * (row_idx + 0.5))
-        alts = np.asarray(elevation[row_idx, col_idx], dtype=float)
-
-        gdf = gpd.GeoDataFrame(
-            {'lat': ys, 'lon': xs, 'alt': alts},
-            geometry=gpd.points_from_xy(xs, ys),
-        )
-        gdf = gdf.set_crs(_crs)
+            rows, cols = elevation.shape
+            for row in range(rows):
+                for col in range(cols):
+                    if np.ma.is_masked(elevation[row, col]):
+                        continue
+                    lon, lat = rasterio.transform.xy(transform, row, col, offset='center')
+                    alt = float(elevation[row, col])
+                    lats.append(lat)
+                    lons.append(lon)
+                    alts.append(alt)
+                    centroids.append(Point(lon, lat))
+        gdf = gpd.GeoDataFrame({'lat': lats, 'lon': lons, 'alt': alts, 'geometry': centroids})
+        gdf.crs = src.crs
         logger.info("DEM pixel centroids extracted successfully.")
         return gdf
 

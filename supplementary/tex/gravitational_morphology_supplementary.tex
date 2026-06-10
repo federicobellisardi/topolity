@@ -1,0 +1,1232 @@
+
+\documentclass{article}
+
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{paralist}
+\usepackage{verbatim}
+\usepackage{geometry}
+\usepackage{fancyhdr}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\usepackage{url}
+\usepackage{xcolor}
+\graphicspath{{../output/figures/}}
+
+\pagestyle{fancy}
+\renewcommand{\headrulewidth}{1pt}
+\renewcommand{\footrulewidth}{1pt}
+\lhead{Bellisardi, Cano Su\~nen, Ruiz-Varona, Ramasco}
+\chead{}
+\rhead{\thepage}
+\lfoot{Impact of mobility energetic balance on urban spatial organization}
+\cfoot{}
+\rfoot{Supplementary Information}
+
+\renewcommand{\rmdefault}{ppl}
+\linespread{1.05}
+\usepackage[scaled]{helvet}
+\usepackage{courier}
+\normalfont
+
+\begin{document}
+\title{Supplementary Information\\
+\it Impact of mobility energetic balance on urban spatial organization}
+\author{Federico Bellisardi, Enrique Cano Su\~nen, Ana Ruiz-Varona, Jos\'e J. Ramasco}
+\date{}
+\maketitle
+
+\section{Overview}
+
+For each trajectory $\tau$, the energetic cost is decomposed as
+\[
+W_\tau = W_{\mathrm{Lon}}(\tau) + W_{\mathrm{Alt}}(\tau)
+= \lambda L_\tau + m g \int_\tau \max\left(0,\frac{dh}{d\ell}\right)\,d\ell,
+\]
+where the first term accounts for longitudinal displacement and the second term accounts for uphill gravitational work. City-wide mobility expenditure is then obtained by weighting each origin--destination path by its empirical flow,
+\[
+W_{\mathrm{Tot}} = \sum_{(O,D)} F_{OD} W_{OD}.
+\]
+This supplementary document reports the full city-by-city validation of the hypothesis that the empirical urban configuration is the minimum-energy embedding under this three-dimensional energetic functional. We evaluated 32 urban systems for which the full set of transformed embeddings and mobility-energy calculations was available. In 24 cases the empirical embedding is the minimum-energy configuration within the tested transformation set, whereas 8 cases admit a lower-energy transformed alternative. We additionally inspected land/sea validity checks for 57 urban systems and found 36 cities with at least one rejected transformed embedding.
+
+Rejected transformations are not treated here as mere numerical artifacts. They identify embeddings that place part of the road network outside the valid terrestrial domain or outside valid DEM support. Such exclusions are especially common in coastal, estuarine, island, lakefront, basin, and mountain-front settings, where shoreline geometry, topographic barriers, protected land, or infrastructure corridors reduce the feasible embedding space. In that sense, the empirical embedding may already lie close to a constrained energetic optimum jointly imposed by mobility energetics, territorial accessibility, shoreline geometry, and topographic barriers.
+
+Counterexamples should therefore be interpreted cautiously. A lower-energy transformed embedding in the partially constrained search space does not by itself imply that the observed city is globally suboptimal. Instead, these cases may reflect territorial constraints, historical path dependence, protected areas, waterfront geometries, or infrastructure barriers. Throughout the supplementary analysis, translations shorter than 200\,m are excluded so that near-origin perturbations are not over-read as structurally meaningful counterfactual displacements.
+
+\begin{figure*}[t]
+\begin{center}
+\includegraphics[width=0.92\textwidth]{overview/hypothesis_status_overview.pdf}
+\end{center}
+\caption{\label{fig:supp:status}\textbf{Global hypothesis check across all analyzed cities.} Blue bars indicate cities for which at least one transformed embedding has lower $E_{3D}$ than the original configuration. Red markers on the zero line indicate cities for which the empirical embedding is itself the minimum-energy configuration.}
+\end{figure*}
+
+\begin{figure}[t]
+\begin{center}
+\includegraphics[width=0.8\textwidth]{overview/counterexample_improvement.pdf}
+\end{center}
+\caption{\label{fig:supp:counteroverview}\textbf{Relative improvement of the lowest-energy transformed embedding for the counterexample cities.} Larger values indicate stronger departures from the empirical minimum-energy condition.}
+\end{figure}
+
+
+\begin{longtable}{lllrrrrr}
+\caption{\label{tab:supp:summary}Summary of the city-level energetic validation and geographic feasibility checks. The table reports whether the empirical embedding is the minimum-energy configuration, the best transformed alternative when present, the relative deviation from the empirical configuration, and the number of transformations rejected by the land/sea validity check.}\\
+\toprule
+City & Status & Best family & Best param. & $\Delta$[\%] & Tested & Rejected & Rejected frac. \\
+\midrule
+\endfirsthead
+\toprule
+City & Status & Best family & Best param. & $\Delta$[\%] & Tested & Rejected & Rejected frac. \\
+\midrule
+\endhead
+Amsterdam & Counterexample & Translation & 1000 & -0.98 & 10 & 0 & 0.00 \\
+Atlanta & Original minimum & --- & --- & 0.00 & 80 & 0 & 0.00 \\
+Bandung & Counterexample & Translation & 2500 & -2.38 & 37 & 0 & 0.00 \\
+Barcelona & Original minimum & --- & --- & 0.00 & 11 & 2 & 0.15 \\
+Berlin & Original minimum & --- & --- & 0.00 & 37 & 0 & 0.00 \\
+Bogota & Counterexample & Translation & 2000 & -2.40 & 37 & 0 & 0.00 \\
+Brussels & Counterexample & Translation & 2000 & -2.67 & 37 & 0 & 0.00 \\
+Buenos Aires & Counterexample & Translation & 2000 & -1.08 & 11 & 6 & 0.35 \\
+Caracas & Original minimum & --- & --- & 0.00 & 36 & 1 & 0.03 \\
+Chicago & Counterexample & Rotation & 10 & -0.54 & 37 & 0 & 0.00 \\
+Dallas & Original minimum & --- & --- & 0.00 & 37 & 0 & 0.00 \\
+Detroit-Windsor & Original minimum & --- & --- & 0.00 & 37 & 0 & 0.00 \\
+Jakarta & Original minimum & --- & --- & 0.00 & 6 & 21 & 0.78 \\
+Guadalajara & Original minimum & --- & --- & 0.00 & 37 & 0 & 0.00 \\
+Kuala Lumpur & Original minimum & --- & --- & 0.00 & 17 & 13 & 0.45 \\
+Lima & Original minimum & --- & --- & 0.00 & 12 & 2 & 0.14 \\
+London & Original minimum & --- & --- & 0.00 & 4 & 16 & 0.80 \\
+Madrid & Original minimum & --- & --- & 0.00 & 105 & 0 & 0.00 \\
+Manchester & Original minimum & --- & --- & 0.00 & 29 & 8 & 0.22 \\
+Manila & Original minimum & --- & --- & 0.00 & 20 & 13 & 0.41 \\
+Mexico City & Original minimum & --- & --- & 0.00 & 49 & 0 & 0.00 \\
+Milan & Counterexample & Translation & 2500 & -0.04 & 59 & 0 & 0.00 \\
+Moscow & Original minimum & --- & --- & 0.00 & 49 & 0 & 0.00 \\
+Paris & Original minimum & --- & --- & 0.00 & 42 & 0 & 0.00 \\
+Beijing & Original minimum & --- & --- & 0.00 & 10 & 0 & 0.00 \\
+Phoenix & Original minimum & --- & --- & 0.00 & 41 & 0 & 0.00 \\
+Rome & Original minimum & --- & --- & 0.00 & 46 & 1 & 0.07 \\
+Santiago & Original minimum & --- & --- & 0.00 & 147 & 0 & 0.00 \\
+Santo Domingo & Original minimum & --- & --- & 0.00 & 11 & 8 & 0.44 \\
+Sao Paulo & Original minimum & --- & --- & 0.00 & 40 & 0 & 0.00 \\
+Singapore & Original minimum & --- & --- & 0.00 & 11 & 7 & 0.41 \\
+Toronto & Counterexample & Rotation & 20 & -1.69 & 37 & 0 & 0.00 \\
+\bottomrule
+\end{longtable}
+
+
+\section{Cities Consistent with the Hypothesis}
+
+The following cities satisfy the condition that the empirical embedding is the minimum-energy configuration within the tested transformation set: Atlanta, Barcelona, Berlin, Caracas, Dallas, Detroit-Windsor, Jakarta, Guadalajara, Kuala Lumpur, Lima, London, Madrid, Manchester, Manila, Mexico City, Moscow, Paris, Beijing, Phoenix, Rome, Santiago, Santo Domingo, Sao Paulo, Singapore.
+
+The figures below summarize the energetic response of the feasible transformed embeddings around the empirical configuration. Captions and city notes are generated directly from the available valid profiles, so each case reflects the transformation families that are actually shown, those that are absent, and whether land/sea exclusions reduce the feasible domain.
+
+
+\paragraph*{Atlanta.} For Atlanta, the available profiles cover North--South translations, East--West translations, rotations, and directional dilations around the empirical configuration. Within that feasible space, the empirical embedding remains the lowest-energy configuration. The corresponding profile is shown in Figure~\ref{fig:supp:atlanta}.
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Original minimum \\
+Shown families & North--South translations, East--West translations, rotations, and directional dilations \\
+Omitted families & None \\
+Limited subset & None \\
+Best family & Original \\
+Best parameter & --- \\
+$\Delta$ [\%] & 0.00 \\
+Tested variants & 80 \\
+Rejected transformations & 0 \\
+Rejected fraction & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{supporting_profiles/atlanta_energy_profile.pdf}
+\end{center}
+\caption[Energetic sensitivity around the empirical embedding for Atlanta.]{\label{fig:supp:atlanta}\textbf{Energetic sensitivity around the empirical embedding for Atlanta.} The red star marks the empirical configuration. The figure reports North--South translations, East--West translations, rotations, and directional dilations. Within the feasible embedding space, the empirical embedding remains the lowest-energy configuration.}
+\end{figure*}
+
+\paragraph*{Barcelona.} For Barcelona, the available profiles cover North--South translations and East--West translations around the empirical configuration. The omitted panels correspond to rotations, North--South dilations, and East--West dilations and are left out because no valid transformed embeddings remain within the feasible domain. Some transformations are discarded because they move part of the network outside the valid terrestrial domain or outside valid DEM support. In Barcelona, the coastal setting and shoreline geometry plausibly restrict the range of valid transformed embeddings. Within that feasible space, the empirical embedding remains the lowest-energy configuration. Where profiles are available, energy increases clearly away from the empirical embedding within the tested feasible domain. The corresponding profile is shown in Figure~\ref{fig:supp:barcelone}.
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Original minimum \\
+Shown families & North--South translations and East--West translations \\
+Omitted families & rotations, North--South dilations, and East--West dilations \\
+Limited subset & None \\
+Best family & Original \\
+Best parameter & --- \\
+$\Delta$ [\%] & 0.00 \\
+Tested variants & 11 \\
+Rejected transformations & 2 \\
+Rejected fraction & 0.15 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{supporting_profiles/barcelone_energy_profile.pdf}
+\end{center}
+\caption[Energetic sensitivity around the empirical embedding for Barcelona.]{\label{fig:supp:barcelone}\textbf{Energetic sensitivity around the empirical embedding for Barcelona.} The red star marks the empirical configuration. The figure reports North--South translations and East--West translations. Transformed embeddings that place part of the network outside the valid terrestrial domain or outside valid DEM support are excluded. Within the feasible embedding space, the empirical embedding remains the lowest-energy configuration. In Barcelona, the coastal setting and shoreline geometry plausibly restrict the range of valid transformed embeddings. Across the feasible transformed embeddings, energy rises clearly away from the empirical configuration.}
+\end{figure*}
+
+\paragraph*{Berlin.} For Berlin, the available profiles cover North--South translations, East--West translations, rotations, and directional dilations around the empirical configuration. Within that feasible space, the empirical embedding remains the lowest-energy configuration. The corresponding profile is shown in Figure~\ref{fig:supp:berlin}.
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Original minimum \\
+Shown families & North--South translations, East--West translations, rotations, and directional dilations \\
+Omitted families & None \\
+Limited subset & None \\
+Best family & Original \\
+Best parameter & --- \\
+$\Delta$ [\%] & 0.00 \\
+Tested variants & 37 \\
+Rejected transformations & 0 \\
+Rejected fraction & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{supporting_profiles/berlin_energy_profile.pdf}
+\end{center}
+\caption[Energetic sensitivity around the empirical embedding for Berlin.]{\label{fig:supp:berlin}\textbf{Energetic sensitivity around the empirical embedding for Berlin.} The red star marks the empirical configuration. The figure reports North--South translations, East--West translations, rotations, and directional dilations. Within the feasible embedding space, the empirical embedding remains the lowest-energy configuration.}
+\end{figure*}
+
+\paragraph*{Caracas.} For Caracas, the available profiles cover North--South translations, East--West translations, rotations, and directional dilations around the empirical configuration. Some transformations are discarded because they move part of the network outside the valid terrestrial domain or outside valid DEM support. In Caracas, the asymmetry is also compatible with a mountain-front setting, where relief and access corridors constrain displacement directions. Within that feasible space, the empirical embedding remains the lowest-energy configuration. Where profiles are available, energy increases clearly away from the empirical embedding within the tested feasible domain. The corresponding profile is shown in Figure~\ref{fig:supp:caracas}.
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Original minimum \\
+Shown families & North--South translations, East--West translations, rotations, and directional dilations \\
+Omitted families & None \\
+Limited subset & None \\
+Best family & Original \\
+Best parameter & --- \\
+$\Delta$ [\%] & 0.00 \\
+Tested variants & 36 \\
+Rejected transformations & 1 \\
+Rejected fraction & 0.03 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{supporting_profiles/caracas_energy_profile.pdf}
+\end{center}
+\caption[Energetic sensitivity around the empirical embedding for Caracas.]{\label{fig:supp:caracas}\textbf{Energetic sensitivity around the empirical embedding for Caracas.} The red star marks the empirical configuration. The figure reports North--South translations, East--West translations, rotations, and directional dilations. Transformed embeddings that place part of the network outside the valid terrestrial domain or outside valid DEM support are excluded. Within the feasible embedding space, the empirical embedding remains the lowest-energy configuration. In Caracas, the asymmetry is also compatible with a mountain-front setting, where relief and access corridors constrain displacement directions. Across the feasible transformed embeddings, energy rises clearly away from the empirical configuration.}
+\end{figure*}
+
+\paragraph*{Dallas.} For Dallas, the available profiles cover North--South translations, East--West translations, rotations, and directional dilations around the empirical configuration. Within that feasible space, the empirical embedding remains the lowest-energy configuration. The corresponding profile is shown in Figure~\ref{fig:supp:dallas}.
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Original minimum \\
+Shown families & North--South translations, East--West translations, rotations, and directional dilations \\
+Omitted families & None \\
+Limited subset & None \\
+Best family & Original \\
+Best parameter & --- \\
+$\Delta$ [\%] & 0.00 \\
+Tested variants & 37 \\
+Rejected transformations & 0 \\
+Rejected fraction & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{supporting_profiles/dallas_energy_profile.pdf}
+\end{center}
+\caption[Energetic sensitivity around the empirical embedding for Dallas.]{\label{fig:supp:dallas}\textbf{Energetic sensitivity around the empirical embedding for Dallas.} The red star marks the empirical configuration. The figure reports North--South translations, East--West translations, rotations, and directional dilations. Within the feasible embedding space, the empirical embedding remains the lowest-energy configuration.}
+\end{figure*}
+
+\paragraph*{Detroit-Windsor.} For Detroit-Windsor, the available profiles cover North--South translations, East--West translations, rotations, and directional dilations around the empirical configuration. Within that feasible space, the empirical embedding remains the lowest-energy configuration. The corresponding profile is shown in Figure~\ref{fig:supp:detroitwindsor}.
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Original minimum \\
+Shown families & North--South translations, East--West translations, rotations, and directional dilations \\
+Omitted families & None \\
+Limited subset & None \\
+Best family & Original \\
+Best parameter & --- \\
+$\Delta$ [\%] & 0.00 \\
+Tested variants & 37 \\
+Rejected transformations & 0 \\
+Rejected fraction & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{supporting_profiles/detroitwindsor_energy_profile.pdf}
+\end{center}
+\caption[Energetic sensitivity around the empirical embedding for Detroit-Windsor.]{\label{fig:supp:detroitwindsor}\textbf{Energetic sensitivity around the empirical embedding for Detroit-Windsor.} The red star marks the empirical configuration. The figure reports North--South translations, East--West translations, rotations, and directional dilations. Within the feasible embedding space, the empirical embedding remains the lowest-energy configuration.}
+\end{figure*}
+
+\paragraph*{Jakarta.} For Jakarta, the available profiles cover North--South translations around the empirical configuration. The omitted panels correspond to North--South dilations, East--West dilations, East--West translations, and rotations and are left out because no valid transformed embeddings remain within the feasible domain. Some transformations are discarded because they move part of the network outside the valid terrestrial domain or outside valid DEM support. In Jakarta, the coastal setting and shoreline geometry plausibly restrict the range of valid transformed embeddings. Within that feasible space, the empirical embedding remains the lowest-energy configuration. The corresponding profile is shown in Figure~\ref{fig:supp:djakarta}.
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Original minimum \\
+Shown families & North--South translations \\
+Omitted families & North--South dilations, East--West dilations, East--West translations, and rotations \\
+Limited subset & None \\
+Best family & Original \\
+Best parameter & --- \\
+$\Delta$ [\%] & 0.00 \\
+Tested variants & 6 \\
+Rejected transformations & 21 \\
+Rejected fraction & 0.78 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{supporting_profiles/djakarta_energy_profile.pdf}
+\end{center}
+\caption[Energetic sensitivity around the empirical embedding for Jakarta.]{\label{fig:supp:djakarta}\textbf{Energetic sensitivity around the empirical embedding for Jakarta.} The red star marks the empirical configuration. The figure reports North--South translations. Transformed embeddings that place part of the network outside the valid terrestrial domain or outside valid DEM support are excluded. Within the feasible embedding space, the empirical embedding remains the lowest-energy configuration. In Jakarta, the coastal setting and shoreline geometry plausibly restrict the range of valid transformed embeddings.}
+\end{figure*}
+
+\paragraph*{Guadalajara.} For Guadalajara, the available profiles cover North--South translations, East--West translations, rotations, and directional dilations around the empirical configuration. Within that feasible space, the empirical embedding remains the lowest-energy configuration. Where profiles are available, energy increases clearly away from the empirical embedding within the tested feasible domain. The corresponding profile is shown in Figure~\ref{fig:supp:guadalajara}.
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Original minimum \\
+Shown families & North--South translations, East--West translations, rotations, and directional dilations \\
+Omitted families & None \\
+Limited subset & None \\
+Best family & Original \\
+Best parameter & --- \\
+$\Delta$ [\%] & 0.00 \\
+Tested variants & 37 \\
+Rejected transformations & 0 \\
+Rejected fraction & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{supporting_profiles/guadalajara_energy_profile.pdf}
+\end{center}
+\caption[Energetic sensitivity around the empirical embedding for Guadalajara.]{\label{fig:supp:guadalajara}\textbf{Energetic sensitivity around the empirical embedding for Guadalajara.} The red star marks the empirical configuration. The figure reports North--South translations, East--West translations, rotations, and directional dilations. Within the feasible embedding space, the empirical embedding remains the lowest-energy configuration. Across the feasible transformed embeddings, energy rises clearly away from the empirical configuration.}
+\end{figure*}
+
+\paragraph*{Kuala Lumpur.} For Kuala Lumpur, the available profiles cover North--South translations, East--West translations, and rotations around the empirical configuration. The omitted panels correspond to North--South dilations and East--West dilations and are left out because no valid transformed embeddings remain within the feasible domain. For rotations, only a limited subset of valid transformed embeddings is available. Some transformations are discarded because they move part of the network outside the valid terrestrial domain or outside valid DEM support. More generally, the missing families suggest that the feasible embedding space is narrower than the unconstrained Euclidean transformation space. Within that feasible space, the empirical embedding remains the lowest-energy configuration. Where profiles are available, energy increases clearly away from the empirical embedding within the tested feasible domain. The corresponding profile is shown in Figure~\ref{fig:supp:kualalumpur}.
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Original minimum \\
+Shown families & North--South translations, East--West translations, and rotations \\
+Omitted families & North--South dilations and East--West dilations \\
+Limited subset & rotations \\
+Best family & Original \\
+Best parameter & --- \\
+$\Delta$ [\%] & 0.00 \\
+Tested variants & 17 \\
+Rejected transformations & 13 \\
+Rejected fraction & 0.45 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{supporting_profiles/kualalumpur_energy_profile.pdf}
+\end{center}
+\caption[Energetic sensitivity around the empirical embedding for Kuala Lumpur.]{\label{fig:supp:kualalumpur}\textbf{Energetic sensitivity around the empirical embedding for Kuala Lumpur.} The red star marks the empirical configuration. The figure reports North--South translations, East--West translations, and rotations. For rotations, only a limited set of valid transformed embeddings is available. Transformed embeddings that place part of the network outside the valid terrestrial domain or outside valid DEM support are excluded. Within the feasible embedding space, the empirical embedding remains the lowest-energy configuration. More generally, the missing families suggest that the feasible embedding space is narrower than the unconstrained Euclidean transformation space. Across the feasible transformed embeddings, energy rises clearly away from the empirical configuration.}
+\end{figure*}
+
+\paragraph*{Lima.} For Lima, the available profiles cover North--South translations and East--West translations around the empirical configuration. The omitted panels correspond to rotations, North--South dilations, and East--West dilations and are left out because no valid transformed embeddings remain within the feasible domain. Some transformations are discarded because they move part of the network outside the valid terrestrial domain or outside valid DEM support. In Lima, the coastal setting and shoreline geometry plausibly restrict the range of valid transformed embeddings. Within that feasible space, the empirical embedding remains the lowest-energy configuration. Where profiles are available, energy increases clearly away from the empirical embedding within the tested feasible domain. The corresponding profile is shown in Figure~\ref{fig:supp:lima}.
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Original minimum \\
+Shown families & North--South translations and East--West translations \\
+Omitted families & rotations, North--South dilations, and East--West dilations \\
+Limited subset & None \\
+Best family & Original \\
+Best parameter & --- \\
+$\Delta$ [\%] & 0.00 \\
+Tested variants & 12 \\
+Rejected transformations & 2 \\
+Rejected fraction & 0.14 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{supporting_profiles/lima_energy_profile.pdf}
+\end{center}
+\caption[Energetic sensitivity around the empirical embedding for Lima.]{\label{fig:supp:lima}\textbf{Energetic sensitivity around the empirical embedding for Lima.} The red star marks the empirical configuration. The figure reports North--South translations and East--West translations. Transformed embeddings that place part of the network outside the valid terrestrial domain or outside valid DEM support are excluded. Within the feasible embedding space, the empirical embedding remains the lowest-energy configuration. In Lima, the coastal setting and shoreline geometry plausibly restrict the range of valid transformed embeddings. Across the feasible transformed embeddings, energy rises clearly away from the empirical configuration.}
+\end{figure*}
+
+\paragraph*{London.} For London, the available profiles cover rotations around the empirical configuration. The omitted panels correspond to North--South dilations, East--West dilations, North--South translations, and East--West translations and are left out because no valid transformed embeddings remain within the feasible domain. For rotations, only a limited subset of valid transformed embeddings is available. Some transformations are discarded because they move part of the network outside the valid terrestrial domain or outside valid DEM support. More generally, the missing families suggest that the feasible embedding space is narrower than the unconstrained Euclidean transformation space. Within that feasible space, the empirical embedding remains the lowest-energy configuration. Where profiles are available, energy increases clearly away from the empirical embedding within the tested feasible domain. The corresponding profile is shown in Figure~\ref{fig:supp:londres}.
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Original minimum \\
+Shown families & rotations \\
+Omitted families & North--South dilations, East--West dilations, North--South translations, and East--West translations \\
+Limited subset & rotations \\
+Best family & Original \\
+Best parameter & --- \\
+$\Delta$ [\%] & 0.00 \\
+Tested variants & 4 \\
+Rejected transformations & 16 \\
+Rejected fraction & 0.80 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{supporting_profiles/londres_energy_profile.pdf}
+\end{center}
+\caption[Energetic sensitivity around the empirical embedding for London.]{\label{fig:supp:londres}\textbf{Energetic sensitivity around the empirical embedding for London.} The red star marks the empirical configuration. The figure reports rotations. For rotations, only a limited set of valid transformed embeddings is available. Transformed embeddings that place part of the network outside the valid terrestrial domain or outside valid DEM support are excluded. Within the feasible embedding space, the empirical embedding remains the lowest-energy configuration. More generally, the missing families suggest that the feasible embedding space is narrower than the unconstrained Euclidean transformation space. Across the feasible transformed embeddings, energy rises clearly away from the empirical configuration.}
+\end{figure*}
+
+\paragraph*{Madrid.} For Madrid, the available profiles cover North--South translations, East--West translations, rotations, and directional dilations around the empirical configuration. Within that feasible space, the empirical embedding remains the lowest-energy configuration. The corresponding profile is shown in Figure~\ref{fig:supp:madrid}.
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Original minimum \\
+Shown families & North--South translations, East--West translations, rotations, and directional dilations \\
+Omitted families & None \\
+Limited subset & None \\
+Best family & Original \\
+Best parameter & --- \\
+$\Delta$ [\%] & 0.00 \\
+Tested variants & 105 \\
+Rejected transformations & 0 \\
+Rejected fraction & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{supporting_profiles/madrid_energy_profile.pdf}
+\end{center}
+\caption[Energetic sensitivity around the empirical embedding for Madrid.]{\label{fig:supp:madrid}\textbf{Energetic sensitivity around the empirical embedding for Madrid.} The red star marks the empirical configuration. The figure reports North--South translations, East--West translations, rotations, and directional dilations. Within the feasible embedding space, the empirical embedding remains the lowest-energy configuration.}
+\end{figure*}
+
+\paragraph*{Manchester.} For Manchester, the available profiles cover North--South translations, East--West translations, and rotations around the empirical configuration. The omitted panels correspond to North--South dilations and East--West dilations and are left out because no valid transformed embeddings remain within the feasible domain. Some transformations are discarded because they move part of the network outside the valid terrestrial domain or outside valid DEM support. More generally, the missing families suggest that the feasible embedding space is narrower than the unconstrained Euclidean transformation space. Within that feasible space, the empirical embedding remains the lowest-energy configuration. The corresponding profile is shown in Figure~\ref{fig:supp:manchester}.
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Original minimum \\
+Shown families & North--South translations, East--West translations, and rotations \\
+Omitted families & North--South dilations and East--West dilations \\
+Limited subset & None \\
+Best family & Original \\
+Best parameter & --- \\
+$\Delta$ [\%] & 0.00 \\
+Tested variants & 29 \\
+Rejected transformations & 8 \\
+Rejected fraction & 0.22 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{supporting_profiles/manchester_energy_profile.pdf}
+\end{center}
+\caption[Energetic sensitivity around the empirical embedding for Manchester.]{\label{fig:supp:manchester}\textbf{Energetic sensitivity around the empirical embedding for Manchester.} The red star marks the empirical configuration. The figure reports North--South translations, East--West translations, and rotations. Transformed embeddings that place part of the network outside the valid terrestrial domain or outside valid DEM support are excluded. Within the feasible embedding space, the empirical embedding remains the lowest-energy configuration. More generally, the missing families suggest that the feasible embedding space is narrower than the unconstrained Euclidean transformation space.}
+\end{figure*}
+
+\paragraph*{Manila.} For Manila, the available profiles cover North--South translations, East--West translations, and rotations around the empirical configuration. The omitted panels correspond to North--South dilations and East--West dilations and are left out because no valid transformed embeddings remain within the feasible domain. For rotations, only a limited subset of valid transformed embeddings is available. Some transformations are discarded because they move part of the network outside the valid terrestrial domain or outside valid DEM support. More generally, the missing families suggest that the feasible embedding space is narrower than the unconstrained Euclidean transformation space. Within that feasible space, the empirical embedding remains the lowest-energy configuration. The corresponding profile is shown in Figure~\ref{fig:supp:manille}.
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Original minimum \\
+Shown families & North--South translations, East--West translations, and rotations \\
+Omitted families & North--South dilations and East--West dilations \\
+Limited subset & rotations \\
+Best family & Original \\
+Best parameter & --- \\
+$\Delta$ [\%] & 0.00 \\
+Tested variants & 20 \\
+Rejected transformations & 13 \\
+Rejected fraction & 0.41 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{supporting_profiles/manille_energy_profile.pdf}
+\end{center}
+\caption[Energetic sensitivity around the empirical embedding for Manila.]{\label{fig:supp:manille}\textbf{Energetic sensitivity around the empirical embedding for Manila.} The red star marks the empirical configuration. The figure reports North--South translations, East--West translations, and rotations. For rotations, only a limited set of valid transformed embeddings is available. Transformed embeddings that place part of the network outside the valid terrestrial domain or outside valid DEM support are excluded. Within the feasible embedding space, the empirical embedding remains the lowest-energy configuration. More generally, the missing families suggest that the feasible embedding space is narrower than the unconstrained Euclidean transformation space.}
+\end{figure*}
+
+\paragraph*{Mexico City.} For Mexico City, the available profiles cover North--South translations, East--West translations, rotations, and directional dilations around the empirical configuration. Within that feasible space, the empirical embedding remains the lowest-energy configuration. The corresponding profile is shown in Figure~\ref{fig:supp:mexico}.
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Original minimum \\
+Shown families & North--South translations, East--West translations, rotations, and directional dilations \\
+Omitted families & None \\
+Limited subset & None \\
+Best family & Original \\
+Best parameter & --- \\
+$\Delta$ [\%] & 0.00 \\
+Tested variants & 49 \\
+Rejected transformations & 0 \\
+Rejected fraction & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{supporting_profiles/mexico_energy_profile.pdf}
+\end{center}
+\caption[Energetic sensitivity around the empirical embedding for Mexico City.]{\label{fig:supp:mexico}\textbf{Energetic sensitivity around the empirical embedding for Mexico City.} The red star marks the empirical configuration. The figure reports North--South translations, East--West translations, rotations, and directional dilations. Within the feasible embedding space, the empirical embedding remains the lowest-energy configuration.}
+\end{figure*}
+
+\paragraph*{Moscow.} For Moscow, the available profiles cover North--South translations, East--West translations, rotations, and directional dilations around the empirical configuration. Within that feasible space, the empirical embedding remains the lowest-energy configuration. The corresponding profile is shown in Figure~\ref{fig:supp:moscou}.
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Original minimum \\
+Shown families & North--South translations, East--West translations, rotations, and directional dilations \\
+Omitted families & None \\
+Limited subset & None \\
+Best family & Original \\
+Best parameter & --- \\
+$\Delta$ [\%] & 0.00 \\
+Tested variants & 49 \\
+Rejected transformations & 0 \\
+Rejected fraction & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{supporting_profiles/moscou_energy_profile.pdf}
+\end{center}
+\caption[Energetic sensitivity around the empirical embedding for Moscow.]{\label{fig:supp:moscou}\textbf{Energetic sensitivity around the empirical embedding for Moscow.} The red star marks the empirical configuration. The figure reports North--South translations, East--West translations, rotations, and directional dilations. Within the feasible embedding space, the empirical embedding remains the lowest-energy configuration.}
+\end{figure*}
+
+\paragraph*{Paris.} For Paris, the available profiles cover North--South translations, East--West translations, rotations, and North--South dilations around the empirical configuration. The omitted panels correspond to East--West dilations and are left out because no valid transformed embeddings remain within the feasible domain. For North--South dilations, only a limited subset of valid transformed embeddings is available. More generally, the missing families suggest that the feasible embedding space is narrower than the unconstrained Euclidean transformation space. Within that feasible space, the empirical embedding remains the lowest-energy configuration. Where profiles are available, energy increases clearly away from the empirical embedding within the tested feasible domain. The corresponding profile is shown in Figure~\ref{fig:supp:paris}.
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Original minimum \\
+Shown families & North--South translations, East--West translations, rotations, and North--South dilations \\
+Omitted families & East--West dilations \\
+Limited subset & North--South dilations \\
+Best family & Original \\
+Best parameter & --- \\
+$\Delta$ [\%] & 0.00 \\
+Tested variants & 42 \\
+Rejected transformations & 0 \\
+Rejected fraction & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{supporting_profiles/paris_energy_profile.pdf}
+\end{center}
+\caption[Energetic sensitivity around the empirical embedding for Paris.]{\label{fig:supp:paris}\textbf{Energetic sensitivity around the empirical embedding for Paris.} The red star marks the empirical configuration. The figure reports North--South translations, East--West translations, rotations, and North--South dilations. For North--South dilations, only a limited set of valid transformed embeddings is available. Families without any feasible realizations are omitted. Within the feasible embedding space, the empirical embedding remains the lowest-energy configuration. More generally, the missing families suggest that the feasible embedding space is narrower than the unconstrained Euclidean transformation space. Across the feasible transformed embeddings, energy rises clearly away from the empirical configuration.}
+\end{figure*}
+
+\paragraph*{Beijing.} For Beijing, the available profiles cover North--South translations and East--West translations around the empirical configuration. The omitted panels correspond to North--South dilations, East--West dilations, and rotations and are left out because no valid transformed embeddings remain within the feasible domain. More generally, the missing families suggest that the feasible embedding space is narrower than the unconstrained Euclidean transformation space. Within that feasible space, the empirical embedding remains the lowest-energy configuration. The corresponding profile is shown in Figure~\ref{fig:supp:pekin}.
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Original minimum \\
+Shown families & North--South translations and East--West translations \\
+Omitted families & North--South dilations, East--West dilations, and rotations \\
+Limited subset & None \\
+Best family & Original \\
+Best parameter & --- \\
+$\Delta$ [\%] & 0.00 \\
+Tested variants & 10 \\
+Rejected transformations & 0 \\
+Rejected fraction & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{supporting_profiles/pekin_energy_profile.pdf}
+\end{center}
+\caption[Energetic sensitivity around the empirical embedding for Beijing.]{\label{fig:supp:pekin}\textbf{Energetic sensitivity around the empirical embedding for Beijing.} The red star marks the empirical configuration. The figure reports North--South translations and East--West translations. Families without any feasible realizations are omitted. Within the feasible embedding space, the empirical embedding remains the lowest-energy configuration. More generally, the missing families suggest that the feasible embedding space is narrower than the unconstrained Euclidean transformation space.}
+\end{figure*}
+
+\paragraph*{Phoenix.} For Phoenix, the available profiles cover North--South translations, East--West translations, rotations, and directional dilations around the empirical configuration. For East--West dilations, only a limited subset of valid transformed embeddings is available. Within that feasible space, the empirical embedding remains the lowest-energy configuration. The local energy landscape is fairly shallow, so the result is better read as a stable low-energy neighborhood than as a sharply isolated optimum. The corresponding profile is shown in Figure~\ref{fig:supp:phoenix}.
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Original minimum \\
+Shown families & North--South translations, East--West translations, rotations, and directional dilations \\
+Omitted families & None \\
+Limited subset & East--West dilations \\
+Best family & Original \\
+Best parameter & --- \\
+$\Delta$ [\%] & 0.00 \\
+Tested variants & 41 \\
+Rejected transformations & 0 \\
+Rejected fraction & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{supporting_profiles/phoenix_energy_profile.pdf}
+\end{center}
+\caption[Energetic sensitivity around the empirical embedding for Phoenix.]{\label{fig:supp:phoenix}\textbf{Energetic sensitivity around the empirical embedding for Phoenix.} The red star marks the empirical configuration. The figure reports North--South translations, East--West translations, rotations, and directional dilations. For East--West dilations, only a limited set of valid transformed embeddings is available. Within the feasible embedding space, the empirical embedding remains the lowest-energy configuration. The energy landscape remains locally shallow, which suggests a low-energy neighborhood around the empirical embedding rather than a sharply isolated optimum.}
+\end{figure*}
+
+\paragraph*{Rome.} For Rome, the available profiles cover North--South translations, East--West translations, and rotations around the empirical configuration. The omitted panels correspond to North--South dilations and East--West dilations and are left out because no valid transformed embeddings remain within the feasible domain. Some transformations are discarded because they move part of the network outside the valid terrestrial domain or outside valid DEM support. More generally, the missing families suggest that the feasible embedding space is narrower than the unconstrained Euclidean transformation space. Within that feasible space, the empirical embedding remains the lowest-energy configuration. Where profiles are available, energy increases clearly away from the empirical embedding within the tested feasible domain. The corresponding profile is shown in Figure~\ref{fig:supp:rome}.
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Original minimum \\
+Shown families & North--South translations, East--West translations, and rotations \\
+Omitted families & North--South dilations and East--West dilations \\
+Limited subset & None \\
+Best family & Original \\
+Best parameter & --- \\
+$\Delta$ [\%] & 0.00 \\
+Tested variants & 46 \\
+Rejected transformations & 1 \\
+Rejected fraction & 0.07 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{supporting_profiles/rome_energy_profile.pdf}
+\end{center}
+\caption[Energetic sensitivity around the empirical embedding for Rome.]{\label{fig:supp:rome}\textbf{Energetic sensitivity around the empirical embedding for Rome.} The red star marks the empirical configuration. The figure reports North--South translations, East--West translations, and rotations. Transformed embeddings that place part of the network outside the valid terrestrial domain or outside valid DEM support are excluded. Within the feasible embedding space, the empirical embedding remains the lowest-energy configuration. More generally, the missing families suggest that the feasible embedding space is narrower than the unconstrained Euclidean transformation space. Across the feasible transformed embeddings, energy rises clearly away from the empirical configuration.}
+\end{figure*}
+
+\paragraph*{Santiago.} For Santiago, the available profiles cover North--South translations, East--West translations, rotations, and directional dilations around the empirical configuration. In Santiago, the pattern is consistent with a basin or mountain-front setting, where relief and corridor-like accessibility can make the feasible domain strongly asymmetric. Within that feasible space, the empirical embedding remains the lowest-energy configuration. The local energy landscape is fairly shallow, so the result is better read as a stable low-energy neighborhood than as a sharply isolated optimum. The corresponding profile is shown in Figure~\ref{fig:supp:santiago}.
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Original minimum \\
+Shown families & North--South translations, East--West translations, rotations, and directional dilations \\
+Omitted families & None \\
+Limited subset & None \\
+Best family & Original \\
+Best parameter & --- \\
+$\Delta$ [\%] & 0.00 \\
+Tested variants & 147 \\
+Rejected transformations & 0 \\
+Rejected fraction & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{supporting_profiles/santiago_energy_profile.pdf}
+\end{center}
+\caption[Energetic sensitivity around the empirical embedding for Santiago.]{\label{fig:supp:santiago}\textbf{Energetic sensitivity around the empirical embedding for Santiago.} The red star marks the empirical configuration. The figure reports North--South translations, East--West translations, rotations, and directional dilations. Within the feasible embedding space, the empirical embedding remains the lowest-energy configuration. The energy landscape remains locally shallow, which suggests a low-energy neighborhood around the empirical embedding rather than a sharply isolated optimum.}
+\end{figure*}
+
+\paragraph*{Santo Domingo.} For Santo Domingo, the available profiles cover North--South translations, East--West translations, and rotations around the empirical configuration. The omitted panels correspond to North--South dilations and East--West dilations and are left out because no valid transformed embeddings remain within the feasible domain. For rotations, only a limited subset of valid transformed embeddings is available. Some transformations are discarded because they move part of the network outside the valid terrestrial domain or outside valid DEM support. More generally, the missing families suggest that the feasible embedding space is narrower than the unconstrained Euclidean transformation space. Within that feasible space, the empirical embedding remains the lowest-energy configuration. Where profiles are available, energy increases clearly away from the empirical embedding within the tested feasible domain. The corresponding profile is shown in Figure~\ref{fig:supp:santodomingo}.
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Original minimum \\
+Shown families & North--South translations, East--West translations, and rotations \\
+Omitted families & North--South dilations and East--West dilations \\
+Limited subset & rotations \\
+Best family & Original \\
+Best parameter & --- \\
+$\Delta$ [\%] & 0.00 \\
+Tested variants & 11 \\
+Rejected transformations & 8 \\
+Rejected fraction & 0.44 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{supporting_profiles/santodomingo_energy_profile.pdf}
+\end{center}
+\caption[Energetic sensitivity around the empirical embedding for Santo Domingo.]{\label{fig:supp:santodomingo}\textbf{Energetic sensitivity around the empirical embedding for Santo Domingo.} The red star marks the empirical configuration. The figure reports North--South translations, East--West translations, and rotations. For rotations, only a limited set of valid transformed embeddings is available. Transformed embeddings that place part of the network outside the valid terrestrial domain or outside valid DEM support are excluded. Within the feasible embedding space, the empirical embedding remains the lowest-energy configuration. More generally, the missing families suggest that the feasible embedding space is narrower than the unconstrained Euclidean transformation space. Across the feasible transformed embeddings, energy rises clearly away from the empirical configuration.}
+\end{figure*}
+
+\paragraph*{Sao Paulo.} For Sao Paulo, the available profiles cover North--South translations, East--West translations, rotations, and North--South dilations around the empirical configuration. The omitted panels correspond to East--West dilations and are left out because no valid transformed embeddings remain within the feasible domain. More generally, the missing families suggest that the feasible embedding space is narrower than the unconstrained Euclidean transformation space. Within that feasible space, the empirical embedding remains the lowest-energy configuration. Where profiles are available, energy increases clearly away from the empirical embedding within the tested feasible domain. The corresponding profile is shown in Figure~\ref{fig:supp:saopaulo}.
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Original minimum \\
+Shown families & North--South translations, East--West translations, rotations, and North--South dilations \\
+Omitted families & East--West dilations \\
+Limited subset & None \\
+Best family & Original \\
+Best parameter & --- \\
+$\Delta$ [\%] & 0.00 \\
+Tested variants & 40 \\
+Rejected transformations & 0 \\
+Rejected fraction & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{supporting_profiles/saopaulo_energy_profile.pdf}
+\end{center}
+\caption[Energetic sensitivity around the empirical embedding for Sao Paulo.]{\label{fig:supp:saopaulo}\textbf{Energetic sensitivity around the empirical embedding for Sao Paulo.} The red star marks the empirical configuration. The figure reports North--South translations, East--West translations, rotations, and North--South dilations. Families without any feasible realizations are omitted. Within the feasible embedding space, the empirical embedding remains the lowest-energy configuration. Across the feasible transformed embeddings, energy rises clearly away from the empirical configuration.}
+\end{figure*}
+
+\paragraph*{Singapore.} For Singapore, the available profiles cover North--South translations, East--West translations, and rotations around the empirical configuration. The omitted panels correspond to North--South dilations and East--West dilations and are left out because no valid transformed embeddings remain within the feasible domain. For rotations, only a limited subset of valid transformed embeddings is available. Some transformations are discarded because they move part of the network outside the valid terrestrial domain or outside valid DEM support. In Singapore, the coastal setting and shoreline geometry plausibly restrict the range of valid transformed embeddings. Within that feasible space, the empirical embedding remains the lowest-energy configuration. The corresponding profile is shown in Figure~\ref{fig:supp:singapour}.
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Original minimum \\
+Shown families & North--South translations, East--West translations, and rotations \\
+Omitted families & North--South dilations and East--West dilations \\
+Limited subset & rotations \\
+Best family & Original \\
+Best parameter & --- \\
+$\Delta$ [\%] & 0.00 \\
+Tested variants & 11 \\
+Rejected transformations & 7 \\
+Rejected fraction & 0.41 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{supporting_profiles/singapour_energy_profile.pdf}
+\end{center}
+\caption[Energetic sensitivity around the empirical embedding for Singapore.]{\label{fig:supp:singapour}\textbf{Energetic sensitivity around the empirical embedding for Singapore.} The red star marks the empirical configuration. The figure reports North--South translations, East--West translations, and rotations. For rotations, only a limited set of valid transformed embeddings is available. Transformed embeddings that place part of the network outside the valid terrestrial domain or outside valid DEM support are excluded. Within the feasible embedding space, the empirical embedding remains the lowest-energy configuration. In Singapore, the coastal setting and shoreline geometry plausibly restrict the range of valid transformed embeddings.}
+\end{figure*}
+
+
+\clearpage
+\section{Counterexamples and Plausible Explanations}
+
+Table~\ref{tab:counterexamples} lists the cities for which a transformed embedding yields lower $E_{3D}$ than the original one.
+
+\begin{table}[t]
+\caption{\label{tab:counterexamples}Counterexample cities, with the family and parameter of the lowest-energy transformed configuration.}
+\begin{center}
+\begin{tabular}{lrrr}
+\toprule\toprule
+City & Family & Parameter & $\Delta$[\%] \\
+\toprule
+Amsterdam & Translation & 1000 & -0.98 \\
+Bandung & Translation & 2500 & -2.38 \\
+Bogota & Translation & 2000 & -2.40 \\
+Brussels & Translation & 2000 & -2.67 \\
+Buenos Aires & Translation & 2000 & -1.08 \\
+Chicago & Rotation & 10 & -0.54 \\
+Milan & Translation & 2500 & -0.04 \\
+Toronto & Rotation & 20 & -1.69 \\
+\bottomrule\bottomrule
+\end{tabular}
+\end{center}
+\end{table}
+
+These cases should not be read as evidence that the energetic framework fails. Rather, they identify cities for which the unconstrained, or only partially constrained, transformation space contains a lower-energy embedding than the empirical one. Their concentration in waterfront, basin, mountain-front, or otherwise constrained settings is consistent with the idea that the observed urban form may already lie near a geographically constrained optimum rather than a free Euclidean optimum. The notes below are offered as plausible interpretations, not as definitive causal claims.
+
+
+\paragraph*{Amsterdam.}
+Best transformed configuration: translation with parameter 1000, giving a relative improvement of -0.98\%. The corresponding map is shown in Figure~\ref{fig:counter:amsterdam}.
+
+Interpretation: Within the tested transformation set, the best transformed embedding lowers the total energy by 0.98\% relative to the empirical embedding. The difference is therefore worth noting, but not overstating. The best counterfactual is a large westward translation of approximately 2.5 km. Amsterdam is strongly structured by water, polders, canals, and reclaimed lowlands, so feasible embeddings are highly asymmetric. A westward-translated network moves away from the IJ waterfront and the eastern harbor districts, aligning routes with the flatter polder landscape west of the city and avoiding canal-constrained crossings associated with the Grachtengordel ring. Taken together, the pattern is plausibly consistent with territorial constraints, shoreline geometry, protected land, historical path dependence, or infrastructure barriers, rather than with a single definitive causal explanation.
+Some transformation families are not shown for this city because rotations, North--South dilations, and East--West dilations do not retain valid transformed embeddings within the feasible domain.
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Counterexample \\
+Shown families & North--South translations and East--West translations \\
+Omitted families & rotations, North--South dilations, and East--West dilations \\
+Limited subset & None \\
+Best family & Translation \\
+Best parameter & 1000 \\
+$\Delta$ [\%] & -0.98 \\
+Tested variants & 10 \\
+Rejected transformations & 0 \\
+Rejected fraction & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{counterexamples/amsterdam_counterexample_map.png}
+\end{center}
+\caption[Original and best transformed embeddings for Amsterdam.]{\label{fig:counter:amsterdam}\textbf{Original and best transformed embeddings for Amsterdam.} The best transformed configuration is a translation with parameter 1000 and relative deviation -0.98\%. Left: the empirical embedding. Right: the original urban network translated according to the displacement associated with the lowest-energy transformed embedding.}
+\end{figure*}
+
+\paragraph*{Bandung.}
+Best transformed configuration: translation with parameter 2500, giving a relative improvement of -2.38\%. The corresponding map is shown in Figure~\ref{fig:counter:bandung}.
+
+Interpretation: Within the tested transformation set, the best transformed embedding lowers the total energy by 2.38\% relative to the empirical embedding. The difference is therefore worth noting, but not overstating. Bandung lies inside a basin and the best counterfactual is a southward translation of approximately 2.5 km. A plausible explanation is that the empirical footprint remains influenced by basin-edge relief and protected upland constraints in the north, whereas a southward-translated embedding shifts demand toward the flatter southern basin floor, reducing cumulative uphill exposure. Taken together, the pattern is plausibly consistent with territorial constraints, shoreline geometry, protected land, historical path dependence, or infrastructure barriers, rather than with a single definitive causal explanation.
+
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Counterexample \\
+Shown families & North--South translations, East--West translations, rotations, and directional dilations \\
+Omitted families & None \\
+Limited subset & None \\
+Best family & Translation \\
+Best parameter & 2500 \\
+$\Delta$ [\%] & -2.38 \\
+Tested variants & 37 \\
+Rejected transformations & 0 \\
+Rejected fraction & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{counterexamples/bandung_counterexample_map.png}
+\end{center}
+\caption[Original and best transformed embeddings for Bandung.]{\label{fig:counter:bandung}\textbf{Original and best transformed embeddings for Bandung.} The best transformed configuration is a translation with parameter 2500 and relative deviation -2.38\%. Left: the empirical embedding. Right: the original urban network translated according to the displacement associated with the lowest-energy transformed embedding.}
+\end{figure*}
+
+\paragraph*{Bogota.}
+Best transformed configuration: translation with parameter 2000, giving a relative improvement of -2.40\%. The corresponding map is shown in Figure~\ref{fig:counter:bogota}.
+
+Interpretation: Within the tested transformation set, the best transformed embedding lowers the total energy by 2.40\% relative to the empirical embedding. The difference is therefore worth noting, but not overstating. Bogota is bounded by the Cerros Orientales, including a protected forest reserve and buffer strip. The best counterfactual is a westward translation, which is consistent with the idea that moving the same network away from the eastern mountain front reduces cumulative uphill exposure. Taken together, the pattern is plausibly consistent with territorial constraints, shoreline geometry, protected land, historical path dependence, or infrastructure barriers, rather than with a single definitive causal explanation.
+
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Counterexample \\
+Shown families & North--South translations, East--West translations, rotations, and directional dilations \\
+Omitted families & None \\
+Limited subset & None \\
+Best family & Translation \\
+Best parameter & 2000 \\
+$\Delta$ [\%] & -2.40 \\
+Tested variants & 37 \\
+Rejected transformations & 0 \\
+Rejected fraction & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{counterexamples/bogota_counterexample_map.png}
+\end{center}
+\caption[Original and best transformed embeddings for Bogota.]{\label{fig:counter:bogota}\textbf{Original and best transformed embeddings for Bogota.} The best transformed configuration is a translation with parameter 2000 and relative deviation -2.40\%. Left: the empirical embedding. Right: the original urban network translated according to the displacement associated with the lowest-energy transformed embedding.}
+\end{figure*}
+
+\paragraph*{Brussels.}
+Best transformed configuration: translation with parameter 2000, giving a relative improvement of -2.67\%. The corresponding map is shown in Figure~\ref{fig:counter:bruxelles}.
+
+Interpretation: Within the tested transformation set, the best transformed embedding lowers the total energy by 2.67\% relative to the empirical embedding. The difference is therefore worth noting, but not overstating. Brussels shows a counterexample with a northward translation of approximately 2 km. The terrain to the north of the city transitions toward the flatter Flemish Plain, while the southeastern districts abut the Brabant uplands and border the Sonian Forest, a protected Natura 2000 area. Moving the network northward reduces exposure to the relief gradient that rises from the Senne valley toward the southeastern highlands, placing more routes on lower-relief terrain. Taken together, the pattern is plausibly consistent with territorial constraints, shoreline geometry, protected land, historical path dependence, or infrastructure barriers, rather than with a single definitive causal explanation.
+
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Counterexample \\
+Shown families & North--South translations, East--West translations, rotations, and directional dilations \\
+Omitted families & None \\
+Limited subset & None \\
+Best family & Translation \\
+Best parameter & 2000 \\
+$\Delta$ [\%] & -2.67 \\
+Tested variants & 37 \\
+Rejected transformations & 0 \\
+Rejected fraction & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{counterexamples/bruxelles_counterexample_map.png}
+\end{center}
+\caption[Original and best transformed embeddings for Brussels.]{\label{fig:counter:bruxelles}\textbf{Original and best transformed embeddings for Brussels.} The best transformed configuration is a translation with parameter 2000 and relative deviation -2.67\%. Left: the empirical embedding. Right: the original urban network translated according to the displacement associated with the lowest-energy transformed embedding.}
+\end{figure*}
+
+\paragraph*{Buenos Aires.}
+Best transformed configuration: translation with parameter 2000, giving a relative improvement of -1.08\%. The corresponding map is shown in Figure~\ref{fig:counter:buenosaires}.
+
+Interpretation: Within the tested transformation set, the best transformed embedding lowers the total energy by 1.08\% relative to the empirical embedding. The difference is therefore worth noting, but not overstating. Buenos Aires lies on the western bank of the Río de la Plata estuary and on the Pampean plain. The best counterfactual is a westward translation of approximately 2 km, which is consistent with the idea that moving the same network away from the eastern estuarine shore places high-demand routes on flatter, more topographically uniform terrain. The analysis domain is constrained to the west and south only, because eastward and northward translations place portions of the network over the estuary or the Paraná Delta. This geographic asymmetry limits the set of feasible counterfactuals and should be interpreted cautiously. Taken together, the pattern is plausibly consistent with territorial constraints, shoreline geometry, protected land, historical path dependence, or infrastructure barriers, rather than with a single definitive causal explanation.
+Some transformation families are not shown for this city because North--South dilations, East--West dilations, and rotations do not retain valid transformed embeddings within the feasible domain.
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Counterexample \\
+Shown families & North--South translations and East--West translations \\
+Omitted families & North--South dilations, East--West dilations, and rotations \\
+Limited subset & None \\
+Best family & Translation \\
+Best parameter & 2000 \\
+$\Delta$ [\%] & -1.08 \\
+Tested variants & 11 \\
+Rejected transformations & 6 \\
+Rejected fraction & 0.35 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{counterexamples/buenosaires_counterexample_map.png}
+\end{center}
+\caption[Original and best transformed embeddings for Buenos Aires.]{\label{fig:counter:buenosaires}\textbf{Original and best transformed embeddings for Buenos Aires.} The best transformed configuration is a translation with parameter 2000 and relative deviation -1.08\%. Left: the empirical embedding. Right: the original urban network translated according to the displacement associated with the lowest-energy transformed embedding.}
+\end{figure*}
+
+\paragraph*{Chicago.}
+Best transformed configuration: rotation with parameter 10, giving a relative improvement of -0.54\%. The corresponding map is shown in Figure~\ref{fig:counter:chicago}.
+
+Interpretation: Within the tested transformation set, the best transformed embedding lowers the total energy by 0.54\% relative to the empirical embedding. The difference is therefore worth noting, but not overstating. Chicago's best counterfactual is a rotation. The city is strongly conditioned by the Lake Michigan shoreline and by an extensively engineered artificial shoreline, so rotating the same topology can change how routes intersect the waterfront edge and shoreline-protection geometry without altering the network itself. Taken together, the pattern is plausibly consistent with territorial constraints, shoreline geometry, protected land, historical path dependence, or infrastructure barriers, rather than with a single definitive causal explanation.
+
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Counterexample \\
+Shown families & North--South translations, East--West translations, rotations, and directional dilations \\
+Omitted families & None \\
+Limited subset & None \\
+Best family & Rotation \\
+Best parameter & 10 \\
+$\Delta$ [\%] & -0.54 \\
+Tested variants & 37 \\
+Rejected transformations & 0 \\
+Rejected fraction & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{counterexamples/chicago_counterexample_map.png}
+\end{center}
+\caption[Original and best transformed embeddings for Chicago.]{\label{fig:counter:chicago}\textbf{Original and best transformed embeddings for Chicago.} The best transformed configuration is a rotation with parameter 10 and relative deviation -0.54\%. Left: the empirical embedding. Right: the lowest-energy rotated embedding, shown against the same geographic context.}
+\end{figure*}
+
+\paragraph*{Milan.}
+Best transformed configuration: translation with parameter 2500, giving a relative improvement of -0.04\%. The corresponding map is shown in Figure~\ref{fig:counter:milan}.
+
+Interpretation: For Milan, the deviation is extremely small (-0.04\%), so this case is better read as a near-degeneracy than as evidence for a distinct structural optimum. The violation is numerically very small relative to the city's total energy, and the best counterfactual is an oblique translation. Milan lies on the Po plain, so this case is likely a near-degeneracy in an almost flat landscape rather than a substantively different energetic optimum. Taken together, the pattern is plausibly consistent with territorial constraints, shoreline geometry, protected land, historical path dependence, or infrastructure barriers, rather than with a single definitive causal explanation.
+
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Counterexample \\
+Shown families & North--South translations, East--West translations, rotations, and directional dilations \\
+Omitted families & None \\
+Limited subset & None \\
+Best family & Translation \\
+Best parameter & 2500 \\
+$\Delta$ [\%] & -0.04 \\
+Tested variants & 59 \\
+Rejected transformations & 0 \\
+Rejected fraction & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{counterexamples/milan_counterexample_map.png}
+\end{center}
+\caption[Original and best transformed embeddings for Milan.]{\label{fig:counter:milan}\textbf{Original and best transformed embeddings for Milan.} The best transformed configuration is a translation with parameter 2500 and relative deviation -0.04\%. Left: the empirical embedding. Right: the original urban network translated according to the displacement associated with the lowest-energy transformed embedding.}
+\end{figure*}
+
+\paragraph*{Toronto.}
+Best transformed configuration: rotation with parameter 20, giving a relative improvement of -1.69\%. The corresponding map is shown in Figure~\ref{fig:counter:toronto}.
+
+Interpretation: Within the tested transformation set, the best transformed embedding lowers the total energy by 1.69\% relative to the empirical embedding. The difference is therefore worth noting, but not overstating. Toronto combines a long Lake Ontario waterfront with a dense ravine system that channels movement through valley corridors. The strong rotational counterexample suggests that shoreline orientation and ravine alignment play a first-order role in the energetic landscape. Taken together, the pattern is plausibly consistent with territorial constraints, shoreline geometry, protected land, historical path dependence, or infrastructure barriers, rather than with a single definitive causal explanation.
+
+
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.60\textwidth}}
+\toprule
+Metric & Value \\
+\midrule
+Status & Counterexample \\
+Shown families & North--South translations, East--West translations, rotations, and directional dilations \\
+Omitted families & None \\
+Limited subset & None \\
+Best family & Rotation \\
+Best parameter & 20 \\
+$\Delta$ [\%] & -1.69 \\
+Tested variants & 37 \\
+Rejected transformations & 0 \\
+Rejected fraction & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+
+\begin{figure*}[h]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{counterexamples/toronto_counterexample_map.png}
+\end{center}
+\caption[Original and best transformed embeddings for Toronto.]{\label{fig:counter:toronto}\textbf{Original and best transformed embeddings for Toronto.} The best transformed configuration is a rotation with parameter 20 and relative deviation -1.69\%. Left: the empirical embedding. Right: the lowest-energy rotated embedding, shown against the same geographic context.}
+\end{figure*}
+
+
+\clearpage
+\section{Configurations Rejected by the Land/Sea Check}
+
+The land/sea check discards transformed graphs that place nodes outside the valid terrestrial domain or outside the valid DEM support. These rejected configurations are common in urban systems adjacent to coastlines, islands, lakefronts, estuaries, deltas, and mountain fronts, where even moderate rigid transformations can move part of the network into water bodies or beyond the supported elevation mask. Rejected transformations therefore reduce the feasible embedding space and should be read as geographic information rather than only as missing data.
+
+\begin{figure*}[t]
+\begin{center}
+\includegraphics[width=0.94\textwidth]{land_false/land_false_counts.pdf}
+\end{center}
+\caption{\label{fig:supp:landcounts}\textbf{Cities with rejected land/sea transformations.} Bars report how many transformed configurations were rejected by the land check in each city.}
+\end{figure*}
+
+\begin{longtable}{lrrr}
+\caption{\label{tab:landfalse}Cities with at least one rejected transformed embedding.}\\
+\toprule
+City & Rejected & Total & Fraction \\
+\midrule
+\endfirsthead
+\toprule
+City & Rejected & Total & Fraction \\
+\midrule
+\endhead
+Bangkok & 28 & 29 & 0.97 \\
+Washington & 27 & 28 & 0.96 \\
+Philadelphia & 24 & 25 & 0.96 \\
+Osaka & 22 & 23 & 0.96 \\
+Jakarta & 21 & 27 & 0.78 \\
+San Diego & 21 & 22 & 0.95 \\
+Boston & 19 & 20 & 0.95 \\
+Nagoya & 19 & 20 & 0.95 \\
+Montreal & 18 & 19 & 0.95 \\
+Miami & 17 & 18 & 0.94 \\
+London & 16 & 20 & 0.80 \\
+Saint Petersburg & 16 & 17 & 0.94 \\
+Stockholm & 16 & 17 & 0.94 \\
+Kuala Lumpur & 13 & 29 & 0.45 \\
+Manila & 13 & 32 & 0.41 \\
+Los Angeles & 11 & 12 & 0.92 \\
+Houston & 9 & 10 & 0.90 \\
+Dublin & 8 & 9 & 0.89 \\
+Manchester & 8 & 37 & 0.22 \\
+Santo Domingo & 8 & 18 & 0.44 \\
+Sydney & 8 & 9 & 0.89 \\
+Singapore & 7 & 17 & 0.41 \\
+Buenos Aires & 6 & 17 & 0.35 \\
+Istanbul & 5 & 6 & 0.83 \\
+Lisbon & 5 & 6 & 0.83 \\
+New York & 5 & 6 & 0.83 \\
+Shanghai & 5 & 6 & 0.83 \\
+Taipei & 5 & 6 & 0.83 \\
+Vancouver & 5 & 6 & 0.83 \\
+Seoul & 4 & 5 & 0.80 \\
+Barcelona & 2 & 13 & 0.15 \\
+Lima & 2 & 14 & 0.14 \\
+San Francisco & 2 & 3 & 0.67 \\
+Caracas & 1 & 37 & 0.03 \\
+Rio de Janeiro & 1 & 2 & 0.50 \\
+Rome & 1 & 15 & 0.07 \\
+\bottomrule
+\end{longtable}
+
+Overall, invalid transformed embeddings are not randomly distributed across cities. They concentrate in urban systems whose surrounding geography strongly constrains the accessible configuration space. This supports the interpretation that urban energetic optimality should be evaluated within a geographically feasible domain rather than in an unconstrained Euclidean transformation space.
+
+\clearpage
+\section{DEM Product Validation}
+
+To verify that the fine-grid DEM used throughout the analysis does not bias the energetic results, we compared it against Copernicus-based elevation values for two representative cities spanning different relief regimes: Barcelona and Santiago. In both cases the relationship is nearly one-to-one, indicating that the energetic estimates are robust with respect to the DEM product used at this scale.
+
+\begin{figure*}[t]
+\begin{center}
+\includegraphics[width=0.48\textwidth]{dem_validation/scatter_barcelona.pdf}
+\includegraphics[width=0.48\textwidth]{dem_validation/scatter_santiago.pdf}
+\end{center}
+\caption{\label{fig:supp:demcorr}\textbf{Validation of the DEM used in the main analysis against Copernicus-based elevation values.} Left: Barcelona. Right: Santiago. In both cities the scatter is tightly concentrated around the identity line, supporting the statement that the fine-grid DEM used in the project is almost perfectly correlated with the Copernicus product.}
+\end{figure*}
+
+\end{document}

@@ -1,0 +1,48 @@
+{
+    "utils": {
+        "log_level": "INFO",
+        "test_mode": true
+    },
+    "data_processing": {
+        "twitter": false,
+        "tag" : "bo",  
+        "bbox": {
+            "er": {
+              "min_lon": 9.0,
+              "min_lat": 43.8,
+              "max_lon": 13.0,
+              "max_lat": 45.2
+            },
+            "bo": {
+              "min_lon": 11.2,
+              "min_lat": 44.4,
+              "max_lon": 11.7,
+              "max_lat": 44.7
+            }
+        },
+        "data_source": {
+            "twitter": {
+                "tag": "bo"
+            },
+            "worldpop": {
+                "input_file": "worldpop/raw/ita_ppp_2020_constrained.tif"
+            }
+        },
+        "altitude":{
+            "api_key": "da4217e2ba10a0edd8e0269f12c4717c",
+            "num_classes": 6,
+            "contour_interval": 50,
+            "output_map" : "elevation_map.html"
+            },    
+            "output_folder": "output"
+        },
+    "dynamics": {
+        "translation_dem": true,
+        "grid_cell_size": 100,
+        "osm_padding": 0.01,
+        "network_type": "drive",
+        "simplify": true,
+        "epsilon": 1e-6,
+        "search_radius": 50
+    }
+}

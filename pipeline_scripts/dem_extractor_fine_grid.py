@@ -1,7 +1,6 @@
-"""
-author: Federico Bellisardi
-execution: runlog -t 120:00 -m 128 -c 8 -j fine_grid_madrid python dem_extractor_fine_grid.py --city madrid --step-meters 100 --num-points 15 --rotation-angles 340 345 350 355 358 359 1 2 5 10 15 20 --workers 8 --seed 42 --resume
-"""
+#!/usr/bin/env python3
+"""DEM extraction and fine-grid graph generation for a city."""
+
 import os
 import argparse
 import pickle
@@ -15,9 +14,6 @@ import json
 import multiprocessing as mp
 import numpy as np
 from scipy.spatial import cKDTree
-import gc
-import rasterio
-from pyproj import Transformer
 
 import matplotlib.pyplot as plt
 import matplotlib
@@ -41,53 +37,27 @@ _LAND_MASK = None
 _DEM_TREE = None
 _DEM_ALTS = None
 _CMAP = None
-_LAND_CHECK_MODE = 'sample'
-_DEM_MODE = 'tree'
-_DEM_SRC = None
-_DEM_TRANSFORMER = None
 
-def _init_worker(dem_file, graphs_dir, center_y, center_x, cmap_N=None, dem_tree=None, dem_alts=None, dem_mode='tree'):
+def _init_worker(dem_file, graphs_dir, center_y, center_x, cmap_N=None, dem_tree=None, dem_alts=None):
     global _GRAPHS_DIR, _CENTER_Y, _CENTER_X, _DEM_TREE, _DEM_ALTS, _CMAP
-    global _DEM_MODE, _DEM_SRC, _DEM_TRANSFORMER
     _GRAPHS_DIR = graphs_dir
     _CENTER_Y = center_y
     _CENTER_X = center_x
-    _DEM_MODE = dem_mode
     if cmap_N is None:
         _CMAP = plt.get_cmap('Set1')
     else:
         _CMAP = plt.get_cmap('Set1', int(cmap_N))
-    # If already set (inherited via fork) or explicitly provided, skip reloading.
-    if _DEM_MODE == 'tree':
-        if _DEM_TREE is None or _DEM_ALTS is None:
-            if dem_tree is not None and dem_alts is not None:
-                _DEM_TREE = dem_tree
-                _DEM_ALTS = dem_alts
-            else:
-                reader = DEMReader(dem_file)
-                dem_gdf = reader.get_pixel_centroids()
-                dem_coords = np.vstack((dem_gdf.geometry.y.values, dem_gdf.geometry.x.values)).T
-                _DEM_ALTS = dem_gdf['alt'].values.astype(float)
-                _DEM_TREE = cKDTree(dem_coords)
-    else:
-        if _DEM_SRC is None:
-            _DEM_SRC = rasterio.open(dem_file)
-            _DEM_TRANSFORMER = None
-            if _DEM_SRC.crs and _DEM_SRC.crs.to_string() != "EPSG:4326":
-                _DEM_TRANSFORMER = Transformer.from_crs("EPSG:4326", _DEM_SRC.crs, always_xy=True)
-
-
-def _nodes_on_land(G, land_mask, mode='sample'):
-    """Check whether graph nodes lie on land.
-
-    mode='sample': quick check on representative nodes.
-    mode='full': strict check on all nodes (slower, safer for coastal cities).
-    """
-    if mode == 'full':
-        nodes_iter = G.nodes(data=True)
-    else:
-        nodes_iter = sample_graph_nodes(G)
-    return all(Point(d['x'], d['y']).within(land_mask) for _, d in nodes_iter)
+    # If already set (inherited via fork) or explicitly provided, skip reloading
+    if _DEM_TREE is None or _DEM_ALTS is None:
+        if dem_tree is not None and dem_alts is not None:
+            _DEM_TREE = dem_tree
+            _DEM_ALTS = dem_alts
+        else:
+            reader = DEMReader(dem_file)
+            dem_gdf = reader.get_pixel_centroids()
+            dem_coords = np.vstack((dem_gdf.geometry.y.values, dem_gdf.geometry.x.values)).T
+            _DEM_ALTS = dem_gdf['alt'].values.astype(float)
+            _DEM_TREE = cKDTree(dem_coords)
 
 def is_dem_complete(path):
     return os.path.exists(path) and os.path.getsize(path) > 1e6
@@ -174,24 +144,6 @@ def assign_altitudes_from_tree(G, tree, dem_alts):
         z = float(dem_alts[int(alt_idx)])
         data['z'] = z
         if z == 0:
-            missing += 1
-    if missing:
-        logger.warning(f"{missing} nodes without assigned altitude.")
-    return missing
-
-
-def assign_altitudes_from_raster(G, dem_src, transformer=None):
-    nodes = list(G.nodes(data=True))
-    coords = [(data['x'], data['y']) for _, data in nodes]
-    if transformer is not None:
-        coords = [transformer.transform(lon, lat) for lon, lat in coords]
-
-    zs = [v[0] for v in dem_src.sample(coords)]
-    missing = 0
-    for (node, data), z in zip(nodes, zs):
-        z_val = float(z) if z is not None and np.isfinite(z) else 0.0
-        data['z'] = z_val
-        if z_val == 0.0:
             missing += 1
     if missing:
         logger.warning(f"{missing} nodes without assigned altitude.")
@@ -538,8 +490,7 @@ def generate_fine_scales(scale_factors, axis, land_mask=None, graph=None):
 
 def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
                    ns_scale_factors, ew_scale_factors, api_key, workers=None,
-                   seed=None, use_fua=False, fua_path=None, resume=False,
-                   low_memory=False, dem_mode='auto'):
+                   seed=None, use_fua=False, fua_path=None, resume=False):
     logger.info(f"[{folder}] Starting fine-grid processing")
     folder_path = os.path.join(base_path, folder)
     csv_file = os.path.join(folder_path, 'data_useful.csv')
@@ -581,39 +532,15 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
     if not is_dem_complete(dem_file):
         download_dem(dem_file, ext_bounds, api_key)
 
-    selected_dem_mode = dem_mode
-    if selected_dem_mode == 'auto':
-        selected_dem_mode = 'raster' if low_memory else 'tree'
-    if selected_dem_mode not in ('tree', 'raster'):
-        selected_dem_mode = 'tree'
-    logger.info(f"[{folder}] DEM mode: {selected_dem_mode}")
-
     dem_reader = DEMReader(dem_file)
     logger.info(f"[{folder}] DEMReader initialized")
-
-    dem_tree = None
-    dem_alts = None
-    dem_src_main = None
-    dem_transformer_main = None
-    if selected_dem_mode == 'tree':
-        dem_gdf = dem_reader.get_pixel_centroids()
-        dem_coords = np.vstack((dem_gdf.geometry.y.values, dem_gdf.geometry.x.values)).T
-        dem_alts = dem_gdf['alt'].values.astype(float)
-        dem_tree = cKDTree(dem_coords)
-        del dem_gdf
-        del dem_coords
-    else:
-        dem_src_main = rasterio.open(dem_file)
-        if dem_src_main.crs and dem_src_main.crs.to_string() != "EPSG:4326":
-            dem_transformer_main = Transformer.from_crs("EPSG:4326", dem_src_main.crs, always_xy=True)
-    if low_memory:
-        gc.collect()
-
+    dem_gdf = dem_reader.get_pixel_centroids()
+    dem_coords = np.vstack((dem_gdf.geometry.y.values, dem_gdf.geometry.x.values)).T
+    dem_alts = dem_gdf['alt'].values.astype(float)
+    dem_tree = cKDTree(dem_coords)
     # Cache DEM globally so forked workers reuse without reloading
-    global _DEM_TREE, _DEM_ALTS, _DEM_MODE, _DEM_SRC, _DEM_TRANSFORMER
-    _DEM_MODE = selected_dem_mode
+    global _DEM_TREE, _DEM_ALTS
     _DEM_TREE, _DEM_ALTS = dem_tree, dem_alts
-    _DEM_SRC, _DEM_TRANSFORMER = dem_src_main, dem_transformer_main
 
     # Load city bbox polygon, optionally replace with FUA
     city_bbox_poly = load_metropolis_bbox(json_bbox, folder)
@@ -670,10 +597,7 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
         
         # Ensure altitudes are assigned
         if all(data.get('z', 0) == 0 for _, data in list(G.nodes(data=True))[:10]):
-            if selected_dem_mode == 'tree':
-                missing = assign_altitudes_from_tree(G, dem_tree, dem_alts)
-            else:
-                missing = assign_altitudes_from_raster(G, dem_src_main, dem_transformer_main)
+            missing = assign_altitudes(G, dem_reader)
             logger.info(f"[{folder}] Re-assigned altitudes, missing: {missing}")
     else:
         logger.info(f"[{folder}] Building original graph from polygon...")
@@ -694,10 +618,7 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
             cc = max(nx.strongly_connected_components(G), key=len)
             G = G.subgraph(cc).copy()
 
-        if selected_dem_mode == 'tree':
-            missing = assign_altitudes_from_tree(G, dem_tree, dem_alts)
-        else:
-            missing = assign_altitudes_from_raster(G, dem_src_main, dem_transformer_main)
+        missing = assign_altitudes(G, dem_reader)
         logger.info(f"[{folder}] Assigned altitudes, missing: {missing}")
 
         # Save to original graphs folder if not exists
@@ -728,7 +649,7 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
     logger.info(f"[{folder}] Generated {len(ns_scales)} N-S scale factors")
     logger.info(f"[{folder}] Generated {len(ew_scales)} E-W scale factors")
 
-    written_stats = 0
+    stats_records = []
 
     # Build variant list
     variants = []
@@ -832,58 +753,53 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
     VARIANT_COUNT = len(args_list)
     total_start = time.time()
     workers = workers or mp.cpu_count()
-    if low_memory and workers > 1:
-        logger.info(f"[{folder}] Low-memory mode active: forcing workers=1 (was {workers})")
-        workers = 1
     logger.info(f"[{folder}] Processing {VARIANT_COUNT} variants on {workers} cores")
     
     global _G, _LAND_MASK
     _G = G
     _LAND_MASK = land_mask
+    # Precompute which original nodes lie on land; nodes originally on water
+    # (e.g., bridges) are excluded from the on-land infeasibility test.
+    global _ORIG_ON_LAND
+    _ORIG_ON_LAND = {n: Point(d['x'], d['y']).within(_LAND_MASK) for n, d in _G.nodes(data=True)}
     
+    results = []
     cmap_N = len(variants)
-
-    fieldnames = [
-        'variant', 'type', 'offset_x', 'offset_y', 'angle_deg',
-        'translation_angle', 'translation_distance_m',
-        'scale_factor', 'scale_axis',
-        'num_nodes', 'num_edges', 'z_mean', 'z_min', 'z_max',
-        'edge_len_mean', 'missing_altitude', 'on_land'
-    ]
-
-    write_header = not os.path.exists(stats_file)
-    with open(stats_file, 'a', newline='') as fstats:
-        writer = csv.DictWriter(fstats, fieldnames=fieldnames)
-        if write_header:
-            writer.writeheader()
     
-        if workers == 1:
-            _init_worker(dem_file, fine_grid_dir, center_y, center_x, cmap_N, dem_mode=selected_dem_mode)
-            for a in args_list:
-                stats = process_variant(a)
-                if stats is not None:
-                    writer.writerow(stats)
-                    written_stats += 1
-                    fstats.flush()
-                if low_memory:
-                    gc.collect()
-        else:
-            with mp.Pool(processes=workers,
-                         initializer=_init_worker,
-                         initargs=(dem_file, fine_grid_dir, center_y, center_x, cmap_N, dem_tree, dem_alts, selected_dem_mode)) as pool:
-                for stats in pool.imap_unordered(process_variant, args_list, chunksize=1):
-                    if stats is not None:
-                        writer.writerow(stats)
-                        written_stats += 1
-                        fstats.flush()
+    if workers == 1:
+        _init_worker(dem_file, fine_grid_dir, center_y, center_x, cmap_N)
+        for a in args_list:
+            results.append(process_variant(a))
+    else:
+        with mp.Pool(processes=workers,
+                     initializer=_init_worker,
+                     initargs=(dem_file, fine_grid_dir, center_y, center_x, cmap_N)) as pool:
+            results = pool.map(process_variant, args_list)
     
     total_end = time.time()
     logger.info(f"[{folder}] Completed all variants in {total_end - total_start:.2f} seconds")
     
-    logger.info(f"[{folder}] Exported {written_stats} stats rows to {stats_file}")
+    for stats in results:
+        if stats is not None:
+            stats_records.append(stats)
 
-    if dem_src_main is not None:
-        dem_src_main.close()
+    # Write stats
+    fieldnames = [
+        'variant', 'type', 'offset_x', 'offset_y', 'angle_deg',
+        'translation_angle', 'translation_distance_m',
+        'scale_factor', 'scale_axis',
+        'num_nodes', 'num_edges', 'z_mean', 'z_min', 'z_max', 
+        'edge_len_mean', 'missing_altitude', 'on_land'
+    ]
+    
+    if stats_records:
+        write_header = not os.path.exists(stats_file)
+        with open(stats_file, 'a', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            if write_header:
+                writer.writeheader()
+            writer.writerows(stats_records)
+        logger.info(f"[{folder}] Exported {len(stats_records)} stats rows to {stats_file}")
 
     logger.info(f"[{folder}] Finished fine-grid processing")
 
@@ -928,8 +844,17 @@ def process_variant(args):
         else:
             G_var = _G.copy()
         
-        # Check if nodes stay on land. Use full mode for strict coastal safety.
-        nodes_on_land = _nodes_on_land(G_var, _LAND_MASK, mode=_LAND_CHECK_MODE)
+        # Check if any node that was originally on land would be moved into water.
+        # Nodes that were originally on water (e.g., bridge nodes) are ignored.
+        nodes_on_land = True
+        for n, d in G_var.nodes(data=True):
+            orig_on_land = _ORIG_ON_LAND.get(n, True)
+            if not orig_on_land:
+                # original node already over water; skip strict check
+                continue
+            if not Point(d['x'], d['y']).within(_LAND_MASK):
+                nodes_on_land = False
+                break
         
         if not nodes_on_land:
             logger.warning(f"Variant {variant} has nodes in the sea, skipping.")
@@ -954,10 +879,7 @@ def process_variant(args):
             }
         
         # Assign altitudes
-        if _DEM_MODE == 'tree':
-            _ = assign_altitudes_from_tree(G_var, _DEM_TREE, _DEM_ALTS)
-        else:
-            _ = assign_altitudes_from_raster(G_var, _DEM_SRC, _DEM_TRANSFORMER)
+        missing = assign_altitudes_from_tree(G_var, _DEM_TREE, _DEM_ALTS)
         
         # Ensure edge lengths exist
         for u, v, d in G_var.edges(data=True):
@@ -989,8 +911,7 @@ def process_variant(args):
 
 def main(api_key=None, example_city=None, cities=None, step_meters=50, num_points=10,
          rotation_angles=None, ns_scale_factors=None, ew_scale_factors=None,
-         workers=None, seed=None, use_fua=False, fua_path=None, resume=False,
-         low_memory=False, land_check='sample', dem_mode='tree'):
+         workers=None, seed=None, use_fua=False, fua_path=None, resume=False):
     config_path = "/home/fbellisardi/code/topolity/tools/conf/conf_extractor.json"
     with open(config_path, 'r') as f:
         config = json.load(f)
@@ -1001,9 +922,6 @@ def main(api_key=None, example_city=None, cities=None, step_meters=50, num_point
     rotation_angles = normalize_rotation_angles(rotation_angles or [0.0])
     ns_scale_factors = [float(s) for s in (ns_scale_factors or [1.0])]
     ew_scale_factors = [float(s) for s in (ew_scale_factors or [1.0])]
-
-    global _LAND_CHECK_MODE
-    _LAND_CHECK_MODE = land_check if land_check in ('sample', 'full') else 'sample'
 
     if cities:
         city_list = [c for c in cities if c]
@@ -1018,8 +936,7 @@ def main(api_key=None, example_city=None, cities=None, step_meters=50, num_point
     for city_folder in city_list:
         process_folder(city_folder, base_path, step_meters, num_points,
                        rotation_angles, ns_scale_factors, ew_scale_factors,
-                       api_key, workers, seed, use_fua, fua_path,
-                       resume=resume, low_memory=low_memory, dem_mode=dem_mode)
+                       api_key, workers, seed, use_fua, fua_path, resume=resume)
 
     logger.info(f"All fine-grid processing completed.\nFiles in {base_path}")
 
@@ -1059,12 +976,6 @@ if __name__ == '__main__':
                         help='Run a quick test with small parameters for validation')
     parser.add_argument('--resume', action='store_true',
                         help='Resume: skip variants already processed (pickle exists and stats row present)')
-    parser.add_argument('--low-memory', action='store_true',
-                        help='Reduce RAM usage (forces workers=1 and extra garbage collection)')
-    parser.add_argument('--land-check', type=str, choices=['sample', 'full'], default='sample',
-                        help='Land validation mode for transformed graphs (sample=fast, full=strict)')
-    parser.add_argument('--dem-mode', type=str, choices=['auto', 'tree', 'raster'], default='tree',
-                        help='DEM assignment mode: tree=reproducible baseline, raster=low-RAM, auto=depends on low-memory')
     args = parser.parse_args()
     
     # Override with test configuration if --test flag is set
@@ -1074,14 +985,11 @@ if __name__ == '__main__':
         args.rotation_angles = [-5, 5]
         args.ns_scale_factors = [0.95, 1.05]
         args.ew_scale_factors = [0.95, 1.05]
-        args.workers = 1
+        args.workers = 3
         args.seed = 42
         args.use_fua = True
-        args.low_memory = True
-        logger.info("Running in TEST mode with: step=50m, points=3, rotations=[-5,5], scales=[0.95,1.05], workers=1, seed=42, use_fua=True, low_memory=True")
+        logger.info("Running in TEST mode with: step=50m, points=3, rotations=[-5,5], scales=[0.95,1.05], workers=3, seed=42, use_fua=True")
     
     main(args.api_key, args.city, args.cities, args.step_meters, args.num_points,
          args.rotation_angles, args.ns_scale_factors, args.ew_scale_factors,
-            args.workers, args.seed, args.use_fua, args.fua_path,
-            resume=args.resume, low_memory=args.low_memory, land_check=args.land_check,
-            dem_mode=args.dem_mode)
+         args.workers, args.seed, args.use_fua, args.fua_path, resume=args.resume)

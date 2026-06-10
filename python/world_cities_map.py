@@ -1,266 +1,290 @@
 #!/usr/bin/env python3
-"""
-Plot a world map and mark specific cities with points.
-
-Cities plotted:
-- Rome
-- Madrid
-- Paris
-- Boston
-- Atlanta
-- Santiago de Chile
-- Barcelona
-
-Usage:
-  python world_cities_map.py [--show] [--output PATH]
-
-By default, saves to ../output/world_cities_map.png relative to this file.
-"""
+"""World map of analysed cities for the gravitational-morphology paper."""
 
 from pathlib import Path
-from typing import List, Tuple
 
 import geopandas as gpd
 from shapely.geometry import Point
 import matplotlib.pyplot as plt
-import os
+from matplotlib.lines import Line2D
+
+SELECTED_CITIES = [
+    "Barcelona",      # showcase
+    "Santiago",       # showcase
+    "Madrid",         # showcase
+    "Amsterdam",
+    "Atlanta",
+    "Bandung",
+    "Berlin",
+    "Bogotá",
+    "Brussels",
+    "Buenos Aires",
+    "Caracas",
+    "Chicago",
+    "Dallas",
+    "Detroit",
+    "Guadalajara",
+    "Lima",
+    "Mexico City",
+    "Milan",
+    "Moscow",
+    "Paris",
+    "Beijing",
+    "Phoenix",
+    "Rome",
+    "São Paulo",
+    "Toronto",
+]
+
+SHOWCASE = {
+    "barcelone": ("Barcelona", "X", "#8B2D91", 360),
+    "barcelona": ("Barcelona", "X", "#8B2D91", 360),
+    "santiago":  ("Santiago",  "D", "#FF7F0E", 360),
+    "madrid":    ("Madrid",    "s", "#1F77B4", 360),
+}
+
+NAME_MAPPING = {
+    "atlanta":          "Atlanta",
+    "barcelone":        "Barcelona",
+    "barcelona":        "Barcelona",
+    "berlin":           "Berlin",
+    "bandung":          "Bandung",
+    "bogota":           "Bogotá",
+    "bruxelles":        "Brussels",
+    "buenosaires":      "Buenos Aires",
+    "caracas":          "Caracas",
+    "chicago":          "Chicago",
+    "dallas":           "Dallas",
+    "detroitwindsor":   "Detroit",
+    "guadalajara":      "Guadalajara",
+    "lima":             "Lima",
+    "madrid":           "Madrid",
+    "mexico":           "Mexico City",
+    "milan":            "Milan",
+    "moscou":           "Moscow",
+    "moscow":           "Moscow",
+    "paris":            "Paris",
+    "pekin":            "Beijing",
+    "beijing":          "Beijing",
+    "phoenix":          "Phoenix",
+    "rome":             "Rome",
+    "santiago":         "Santiago",
+    "saopaulo":         "São Paulo",
+    "singapour":        "Singapore",
+    "toronto":          "Toronto",
+}
+
+GEOCODE_HINTS = {
+    "Atlanta":      "USA",
+    "Barcelona":    "Spain",
+    "Bandung":      "Indonesia",
+    "Beijing":      "China",
+    "Berlin":       "Germany",
+    "Bogotá":       "Colombia",
+    "Brussels":     "Belgium",
+    "Buenos Aires": "Argentina",
+    "Caracas":      "Venezuela",
+    "Chicago":      "USA",
+    "Dallas":       "USA",
+    "Detroit":      "USA",
+    "Guadalajara":  "Mexico",
+    "Lima":         "Peru",
+    "Madrid":       "Spain",
+    "Mexico City":  "Mexico",
+    "Milan":        "Italy",
+    "Moscow":       "Russia",
+    "Paris":        "France",
+    "Phoenix":      "USA",
+    "Rome":         "Italy",
+    "Santiago":     "Chile",
+    "São Paulo":    "Brazil",
+    "Toronto":      "Canada",
+    "Amsterdam":    "Netherlands",
+}
+
+DOT_COLOR = "#2D2D2D"
 
 
 def get_default_output_path() -> Path:
-    # This file is in topolity/python/, so the repo root is two levels up from here
-    repo_root = Path(__file__).resolve().parents[1]
-    out_dir = repo_root / "output"
+    out_dir = Path(__file__).resolve().parents[1] / "output"
     out_dir.mkdir(parents=True, exist_ok=True)
     return out_dir / "world_cities_map.png"
 
 
+def map_name_english(name: str) -> str:
+    n = name.strip().lower()
+    for k, v in NAME_MAPPING.items():
+        if k == n:
+            return v
+    for k, v in NAME_MAPPING.items():
+        if k in n:
+            return v
+    return name.replace("_", " ").replace("-", " ").title()
+
+
 def cities_geodataframe() -> gpd.GeoDataFrame:
-    """Return a GeoDataFrame with the target cities in WGS84 (EPSG:4326).
+    import time
+    import requests
+    from urllib.parse import urlencode
 
-    Geometry coordinates must be (lon, lat).
-    """
-    cities: List[Tuple[str, float, float]] = [
-        ("Rome", 12.4964, 41.9028),
-        ("Madrid", -3.7038, 40.4168),
-        ("Paris", 2.3522, 48.8566),
-        ("Boston", -71.0589, 42.3601),
-        ("Atlanta", -84.3880, 33.7490),
-        ("Santiago de Chile", -70.6693, -33.4489),
-        ("Barcelona", 2.1686, 41.3874),
-    ]
+    dp = Path("/home/fbellisardi/code/topolity/data/data_processed")
+    if not dp.exists():
+        return gpd.GeoDataFrame({"name": [], "geometry": []}, crs="EPSG:4326")
 
-    gdf = gpd.GeoDataFrame(
-        {
-            "name": [c[0] for c in cities],
-            "geometry": [Point(c[1], c[2]) for c in cities],
-        },
-        crs="EPSG:4326",
-    )
-    return gdf
+    selected_set = set(SELECTED_CITIES)
+    rows = []
 
-
-def _cities_bounds(cities: gpd.GeoDataFrame, pad_lon: float = 10.0, pad_lat: float = 10.0):
-    """Compute longitude and latitude bounds from city points with padding.
-
-    Returns (lon_min, lon_max, lat_min, lat_max) clamped to valid ranges.
-    """
-    lons = cities.geometry.x
-    lats = cities.geometry.y
-    lon_min = max(-180.0, float(lons.min() - pad_lon))
-    lon_max = min(180.0, float(lons.max() + pad_lon))
-    lat_min = max(-90.0, float(lats.min() - pad_lat))
-    lat_max = min(90.0, float(lats.max() + pad_lat))
-    return lon_min, lon_max, lat_min, lat_max
-
-
-def _find_local_natural_earth_zip() -> Path | None:
-    """Try to locate a local Natural Earth shapefile ZIP in this workspace.
-
-    Looks for geo_flow/old/ne_10m_land.zip relative to the workspace root.
-    Returns None if not found.
-    """
-    # This file: topolity/python/world_cities_map.py
-    # repo_root -> /home/.../topolity; workspace_root -> parent of repo_root (/home/.../code)
-    repo_root = Path(__file__).resolve().parents[1]
-    workspace_root = repo_root.parent
-    candidates = [
-        workspace_root / "geo_flow" / "old" / "ne_10m_land.zip",
-    ]
-    for p in candidates:
-        if p.exists():
-            return p
-    return None
-
-
-def _load_world_geodataframe() -> gpd.GeoDataFrame | None:
-    """Load a world geometry GeoDataFrame using robust fallbacks.
-
-    Tries, in order:
-    1) Local Natural Earth zip under geo_flow/old/ne_10m_land.zip
-    2) Remote Natural Earth 110m admin-0 countries (S3) via zip+https
-    Returns None if all attempts fail.
-    """
-    # 1) Local zip
-    local_zip = _find_local_natural_earth_zip()
-    if local_zip is not None:
-        for url in (f"zip://{local_zip}", str(local_zip)):
-            try:
-                gdf = gpd.read_file(url)
-                if gdf.crs is None:
-                    gdf.set_crs("EPSG:4326", inplace=True, allow_override=True)
-                else:
-                    gdf = gdf.to_crs("EPSG:4326")
-                return gdf
-            except Exception:
-                pass
-
-    # 2) Remote Natural Earth admin 0 countries (110m)
-    ne_urls = [
-        # Primary S3 path used by Natural Earth
-        "zip+https://naturalearth.s3.amazonaws.com/110m_cultural/ne_110m_admin_0_countries.zip",
-        # Fallback: land polygons
-        "zip+https://naturalearth.s3.amazonaws.com/110m_physical/ne_110m_land.zip",
-    ]
-    for url in ne_urls:
+    def geocode(q: str):
+        url = "https://nominatim.openstreetmap.org/search?" + urlencode(
+            {"q": q, "format": "json", "limit": 1}
+        )
         try:
-            gdf = gpd.read_file(url)
-            if gdf.crs is None:
-                gdf.set_crs("EPSG:4326", inplace=True, allow_override=True)
-            else:
-                gdf = gdf.to_crs("EPSG:4326")
-            return gdf
+            resp = requests.get(url, headers={"User-Agent": "topolity/1.0"}, timeout=10)
+            data = resp.json()
+            if data:
+                return float(data[0]["lon"]), float(data[0]["lat"])
+        except Exception:
+            pass
+        return None
+
+    seen = set()
+    for child in sorted(dp.iterdir()):
+        if not child.is_dir():
+            continue
+        disp = map_name_english(child.name)
+        if disp not in selected_set or disp in seen:
+            continue
+        seen.add(disp)
+        hint = GEOCODE_HINTS.get(disp)
+        coord = geocode(f"{disp}, {hint}") if hint else None
+        if hint:
+            time.sleep(1.0)
+        if coord is None:
+            coord = geocode(disp)
+            time.sleep(1.0)
+        if coord is None:
+            continue
+        rows.append({"name": disp, "folder": child.name, "geometry": Point(*coord)})
+
+    if not rows:
+        return gpd.GeoDataFrame({"name": [], "geometry": []}, crs="EPSG:4326")
+    return gpd.GeoDataFrame(rows, crs="EPSG:4326")
+
+
+def _load_world() -> gpd.GeoDataFrame | None:
+    local = Path("/data/workspaces/fbellisardi/land/ne_10m_land.shp")
+    if local.exists():
+        try:
+            return gpd.read_file(local).to_crs("EPSG:4326")
+        except Exception:
+            pass
+    for url in [
+        "zip+https://naturalearth.s3.amazonaws.com/110m_cultural/ne_110m_admin_0_countries.zip",
+        "zip+https://naturalearth.s3.amazonaws.com/110m_physical/ne_110m_land.zip",
+    ]:
+        try:
+            return gpd.read_file(url).to_crs("EPSG:4326")
         except Exception:
             continue
-
     return None
 
 
-def _plot_with_cartopy(cities: gpd.GeoDataFrame):
-    """Plot using Cartopy as a fallback if GeoDataFrame world not available.
-
-    Returns (fig, ax) if successful, else (None, None).
-    """
-    try:
-        import cartopy.crs as ccrs
-        import cartopy.feature as cfeature
-    except Exception:
-        return None, None
-
-    fig = plt.figure(figsize=(12, 6))
-    ax = plt.axes(projection=ccrs.PlateCarree())
-    ax.add_feature(cfeature.LAND.with_scale("110m"), facecolor="#f1e6c8")
-    ax.add_feature(cfeature.OCEAN.with_scale("110m"), facecolor="#e6f2ff")
-    ax.add_feature(cfeature.COASTLINE.with_scale("110m"), linewidth=0.5)
-    ax.add_feature(cfeature.BORDERS.with_scale("110m"), linestyle=":", linewidth=0.5)
-
-    # Plot cities with distinct markers and colors, add legend
-    marker_cycle = ["o", "s", "^", "D", "X", "P", "*"]
-    color_cycle = ["crimson", "royalblue", "seagreen", "darkorange", "purple", "darkmagenta", "teal"]
-    for (name, geom), mk, col in zip(cities[["name", "geometry"]].itertuples(index=False), marker_cycle, color_cycle):
-        ax.scatter(geom.x, geom.y, color=col, s=100, marker=mk, label=name, transform=ccrs.PlateCarree(), edgecolors="white", linewidths=0.5)
-    ax.legend(loc="lower left", frameon=True)
-
-    # Crop longitudes around cities; keep a generous latitude span
-    lon_min, lon_max, lat_min, lat_max = _cities_bounds(cities, pad_lon=10.0, pad_lat=10.0)
-    ax.set_extent([lon_min, lon_max, max(lat_min, -60.0), min(lat_max, 70.0)], crs=ccrs.PlateCarree())
-    return fig, ax
+def _cities_bounds(cities, pad_lon=12.0, pad_lat=10.0):
+    lons = cities.geometry.x
+    lats = cities.geometry.y
+    return (
+        max(-180.0, float(lons.min()) - pad_lon),
+        min(180.0,  float(lons.max()) + pad_lon),
+        max(-90.0,  float(lats.min()) - pad_lat),
+        min(90.0,   float(lats.max()) + pad_lat),
+    )
 
 
 def plot_world_with_cities(show: bool = False, output_path: Path | None = None) -> Path:
-    """Plot the world and the selected cities.
-
-    Args:
-        show: If True, display the plot window (if environment supports it).
-        output_path: Where to save the PNG. If None, uses default output path.
-
-    Returns:
-        The path where the figure was saved.
-    """
     cities = cities_geodataframe()
+    world = _load_world()
 
-    world = _load_world_geodataframe()
-    fig = None
-    ax = None
+    fig, ax = plt.subplots(figsize=(18, 9), constrained_layout=True)
+    fig.patch.set_facecolor("#F0F4F8")
+    ax.set_facecolor("#C8DDF0")
 
     if world is not None:
-        fig, ax = plt.subplots(figsize=(12, 6), constrained_layout=True)
-        # Ocean background
-        ax.set_facecolor("#e6f2ff")
-        # Plot world boundaries
-        world.plot(ax=ax, color="#f1e6c8", edgecolor="#888888", linewidth=0.4)
-        # Plot cities with distinct markers and colors, add legend
-        marker_cycle = ["o", "s", "^", "D", "X", "P", "*"]
-        color_cycle = ["crimson", "royalblue", "seagreen", "darkorange", "purple", "darkmagenta", "teal"]
-        for (name, geom), mk, col in zip(cities[["name", "geometry"]].itertuples(index=False), marker_cycle, color_cycle):
-            ax.scatter(geom.x, geom.y, color=col, s=60, marker=mk, label=name, edgecolors="white", linewidths=0.5)
-        ax.legend(loc="lower left", frameon=True)
-        ax.set_axis_off()
-
-        # Crop longitude around cities
-        lon_min, lon_max, _, _ = _cities_bounds(cities, pad_lon=10.0, pad_lat=10.0)
-        ax.set_xlim(lon_min, lon_max)
+        world.plot(ax=ax, color="#EDE8D0", edgecolor="#BBBBBB", linewidth=0.35, zorder=1)
     else:
-        # Try cartopy-based fallback
-        fig, ax = _plot_with_cartopy(cities)
-        if fig is None:
-            # Last resort: blank axes with points (no basemap)
-            fig, ax = plt.subplots(figsize=(12, 6), constrained_layout=True)
-            ax.set_facecolor("#e6f2ff")
-            marker_cycle = ["o", "s", "^", "D", "X", "P", "*"]
-            color_cycle = ["crimson", "royalblue", "seagreen", "darkorange", "purple", "darkmagenta", "teal"]
-            for (name, geom), mk, col in zip(cities[["name", "geometry"]].itertuples(index=False), marker_cycle, color_cycle):
-                ax.scatter(geom.x, geom.y, color=col, s=60, marker=mk, label=name, edgecolors="white", linewidths=0.5)
-            ax.legend(loc="lower left", frameon=True)
-            ax.set_xlabel("Longitude")
-            ax.set_ylabel("Latitude")
+        ax.set_facecolor("#E8ECD0")
 
-            # Crop longitude around cities
-            lon_min, lon_max, _, _ = _cities_bounds(cities, pad_lon=10.0, pad_lat=10.0)
-            ax.set_xlim(lon_min, lon_max)
+    showcase_handles = []
 
-    out_path = output_path or get_default_output_path()
-    fig.savefig(out_path, dpi=200)
-    
-    # Also save PDF version
-    out_path_pdf = out_path.with_suffix('.pdf')
-    fig.savefig(out_path_pdf, dpi=200)
+    for _, row in cities.iterrows():
+        folder = str(row.get("folder", "")).lower()
+        lon, lat = row.geometry.x, row.geometry.y
 
+        if folder in SHOWCASE:
+            disp, mk, col, sz = SHOWCASE[folder]
+            ax.scatter(lon, lat, s=sz, marker=mk, color=col,
+                       edgecolors="white", linewidths=1.2, zorder=5)
+            if not any(h.get_label() == disp for h in showcase_handles):
+                showcase_handles.append(
+                    Line2D([0], [0], marker=mk, color="none",
+                           markerfacecolor=col, markeredgecolor="white",
+                           markeredgewidth=1.0, markersize=13, label=disp)
+                )
+        else:
+            ax.scatter(lon, lat, s=260, marker="o", color=DOT_COLOR,
+                       edgecolors="white", linewidths=0.6, alpha=0.85, zorder=4)
+
+    _order = ["Barcelona", "Santiago", "Madrid"]
+    showcase_handles.sort(
+        key=lambda h: _order.index(h.get_label()) if h.get_label() in _order else 99
+    )
+    if showcase_handles:
+        ax.legend(
+            handles=showcase_handles,
+            loc="lower left",
+            fontsize=22,
+            markerscale=1.2,
+            labelspacing=0.9,
+            borderpad=0.9,
+            handletextpad=0.7,
+            framealpha=0.92,
+            edgecolor="#CCCCCC",
+            fancybox=True,
+        )
+
+    if not cities.empty:
+        lon_min, lon_max, lat_min, lat_max = _cities_bounds(cities)
+        ax.set_xlim(lon_min, lon_max)
+        ax.set_ylim(lat_min, lat_max)
+
+    ax.set_axis_off()
+
+    out = output_path or get_default_output_path()
+    fig.savefig(out, dpi=300, bbox_inches="tight", pad_inches=0.05,
+                facecolor=fig.get_facecolor())
+    fig.savefig(out.with_suffix(".pdf"), bbox_inches="tight", pad_inches=0.05,
+                facecolor=fig.get_facecolor())
     if show:
         try:
             plt.show()
         except Exception:
-            # In headless environments, showing may fail; ignore gracefully.
             pass
     else:
         plt.close(fig)
-
-    return out_path
+    return out
 
 
 def main():
     import argparse
-
-    parser = argparse.ArgumentParser(description="Plot a world map and mark selected cities.")
-    parser.add_argument(
-        "--show",
-        action="store_true",
-        help="Display the plot window after saving (may not work in headless environments)",
-    )
-    parser.add_argument(
-        "--output",
-        type=str,
-        default=None,
-        help="Output image path (PNG). Defaults to ../output/world_cities_map.png",
-    )
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--show", action="store_true")
+    parser.add_argument("--output", type=str, default=None)
     args = parser.parse_args()
-
-    out_path = plot_world_with_cities(
+    out = plot_world_with_cities(
         show=args.show,
         output_path=Path(args.output).expanduser().resolve() if args.output else None,
     )
-    out_path_pdf = out_path.with_suffix('.pdf')
-    print(f"Saved map to: {out_path}")
-    print(f"Saved map to: {out_path_pdf}")
+    print(f"Saved: {out}")
+    print(f"Saved: {out.with_suffix('.pdf')}")
 
 
 if __name__ == "__main__":

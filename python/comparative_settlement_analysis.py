@@ -1,13 +1,6 @@
-"""
-Comparative Settlement Analysis - Gravitational Work Comparison
-author: Federico Bellisardi
+#!/usr/bin/env python3
+"""Comparative settlement analysis of gravitational work across candidate locations."""
 
-For each candidate cell, adds 25,000 new residents and computes the total 
-gravitational work required for mobility using a gravity model + Dijkstra routing.
-Compares different settlement locations to find the most energy-efficient option.
-
-Usage: python comparative_settlement_analysis.py
-"""
 
 import os
 import sys
@@ -31,9 +24,25 @@ from scipy.spatial import KDTree
 import contextily as ctx
 
 # Constants
-M = 1.0   # Mass (kg) - per unit, will be multiplied by number of trips
-G = 1.0   # Gravity (m/s²) - normalized
-DS = 10.0  # Sampling interval along edges (meters)
+DS = 10.0
+
+M_PHYS_KG = 1200.0
+G_PHYS = 9.81
+
+def compute_lambda_from_fuel_params(
+    consumption_l_per_100km=(5.0, 8.0),
+    energy_mj_per_l=36.0,
+    efficiency=0.25,
+):
+    """Compute lambda (horizontal cost weight) in J/m from fuel parameters."""
+    c_min, c_max = consumption_l_per_100km
+    c_mean = 0.5 * (c_min + c_max)
+    lambda_mean_mj_per_100km = efficiency * energy_mj_per_l * c_mean
+    return lambda_mean_mj_per_100km * 10.0  # MJ/100km -> J/m
+
+
+# Horizontal travel cost weight (J/m), aligned with pipeline_production logic.
+HORIZONTAL_COST_WEIGHT = compute_lambda_from_fuel_params()
 
 plt.rcParams['figure.figsize'] = (18, 16)
 plt.rcParams['font.size'] = 14
@@ -43,9 +52,7 @@ print("=" * 80)
 print("COMPARATIVE SETTLEMENT ANALYSIS - GRAVITATIONAL WORK")
 print("=" * 80)
 
-# ============================================================================
-# CONFIGURATION
-# ============================================================================
+
 
 CITY = "barcelone"
 NEW_RESIDENTS = 25000  # Number of new residents to add to each test cell
@@ -53,6 +60,9 @@ NEW_RESIDENTS = 25000  # Number of new residents to add to each test cell
 # Gravity model parameters
 D_0 = 25000.0  # Distance decay parameter (meters)
 ALPHA = 1.0   # Population exponent
+
+# Display settings for final chart labels: "GJ" or "SCI"
+WORK_DISPLAY_MODE = "GJ"
 
 # Paths
 BASE_DIR = Path(f"/home/fbellisardi/code/data/data_processed/{CITY}")
@@ -63,8 +73,8 @@ OUTPUT_DIR = Path(f"/home/fbellisardi/code/topolity/output/comparative_settlemen
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # WorldPop data
-WORLDPOP_DIR = Path("/home/fbellisardi/code/topolity/data/worldpop/raw")
-WORLDPOP_FILE = WORLDPOP_DIR / "esp_ppp_2020_constrained.tif"
+WORLDPOP_DIR = Path("/home/fbellisardi/code/topolity/data/worldpop/raw/2020")
+WORLDPOP_FILE = WORLDPOP_DIR / "esp_ppp_2020.tif"
 
 # City bounding box from metropolis.json (lat, lon in EPSG:4326)
 CITY_BBOX_FILE = Path("/home/fbellisardi/code/data/metropolis.json")
@@ -77,6 +87,8 @@ print(f"\nConfiguration:")
 print(f"  City: {CITY}")
 print(f"  New residents per test cell: {NEW_RESIDENTS:,}")
 print(f"  Gravity model d_0: {D_0:,.0f} m")
+print(f"  Horizontal cost weight λ: {HORIZONTAL_COST_WEIGHT:.1f} J/m")
+print(f"  Work display mode: {WORK_DISPLAY_MODE}")
 print(f"  Cells file: {CELLS_FILE}")
 print(f"  Graph file: {GRAPH_FILE}")
 print(f"  DEM file: {DEM_FILE}")
@@ -102,9 +114,7 @@ BBOX_WGS84 = {
 print(f"  City bbox (WGS84): lat[{BBOX_WGS84['min_lat']:.5f}, {BBOX_WGS84['max_lat']:.5f}], "
       f"lon[{BBOX_WGS84['min_lon']:.5f}, {BBOX_WGS84['max_lon']:.5f}]")
 
-# ============================================================================
-# LOAD GRID CELLS
-# ============================================================================
+
 
 print("\n" + "-" * 80)
 print("Loading grid cells...")
@@ -138,9 +148,7 @@ print(f"  Sample cell (first cell):")
 print(f"    Web Mercator bounds: {sample_bounds_wm}")
 print(f"    WGS84 bounds: {sample_bounds_wgs}")
 
-# ============================================================================
-# LOAD ROAD NETWORK GRAPH
-# ============================================================================
+
 
 print("\nLoading road network graph...")
 
@@ -189,9 +197,7 @@ if nodes_df['elevation'].max() == 0:
 
 print(f"  Elevation range: {nodes_df['elevation'].min():.1f} - {nodes_df['elevation'].max():.1f} m")
 
-# ============================================================================
-# PRECOMPUTE EDGE WORK
-# ============================================================================
+
 
 print("\nPrecomputing gravitational work for all edges...")
 
@@ -239,16 +245,14 @@ dem_src = rasterio.open(DEM_FILE)
 # Precompute work for all edges
 edge_work = {}
 for u, v, key in tqdm(G.edges(keys=True), desc="Computing edge work", total=G.number_of_edges()):
-    work = compute_edge_work(G, u, v, dem_src, ds=DS, mass=M, grav=1.0)
+    work = compute_edge_work(G, u, v, dem_src, ds=DS, mass=M_PHYS_KG, grav=G_PHYS)
     edge_work[(u, v, key)] = work
 
 print(f"✓ Edge work precomputed for {len(edge_work):,} edges")
 print(f"  Mean edge work: {np.mean(list(edge_work.values())):.2f}")
 print(f"  Max edge work: {np.max(list(edge_work.values())):.2f}")
 
-# ============================================================================
-# EXTRACT POPULATION FROM WORLDPOP
-# ============================================================================
+
 
 print("\nExtracting population from WorldPop...")
 
@@ -351,9 +355,7 @@ print(f"    Cells with population: {len(cells_gdf):,}")
 print(f"    Mean per cell: {cells_gdf['population'].mean():,.0f}")
 print(f"    Median per cell: {cells_gdf['population'].median():,.0f}")
 
-# ============================================================================
-# ASSIGN NEAREST NETWORK NODE TO EACH CELL
-# ============================================================================
+
 
 print("\nAssigning nearest network node to each cell...")
 
@@ -372,9 +374,7 @@ print(f"✓ Nearest nodes assigned:")
 print(f"    Mean distance to node: {distances.mean():.0f} m")
 print(f"    Max distance to node: {distances.max():.0f} m")
 
-# ============================================================================
-# SELECT TEST CELLS (HARDCODED STRATEGIC LOCATIONS)
-# ============================================================================
+
 
 print("\nSelecting strategic test cells...")
 
@@ -421,11 +421,31 @@ if len(periphery_candidates) > 0:
 else:
     coastal_periphery_cell = cells_gdf.nlargest(1, 'dist_to_center').iloc[0]
 
+# 5. Castelldefels direction: south-west coastal area
+castelldefels_candidates = cells_gdf[
+    (cells_gdf['centroid_y'] < center_y - 1000) &  # South
+    (cells_gdf['centroid_x'] < center_x - 1000) &  # West
+    (cells_gdf['dist_to_center'] > cells_gdf['dist_to_center'].quantile(0.75))  # Medium-far from center
+]
+if len(castelldefels_candidates) > 0:
+    castelldefels_cell = castelldefels_candidates.nlargest(1, 'population').iloc[0]
+else:
+    # Fallback: just southwest
+    sw_candidates = cells_gdf[
+        (cells_gdf['centroid_y'] < center_y) &
+        (cells_gdf['centroid_x'] < center_x)
+    ]
+    if len(sw_candidates) > 0:
+        castelldefels_cell = sw_candidates.nlargest(1, 'dist_to_center').iloc[0]
+    else:
+        castelldefels_cell = cells_gdf.nsmallest(1, 'centroid_x').iloc[0]
+
 test_cells = [
     ('urban_center', urban_center_cell),
     ('foothills', foothills_cell),
     ('mountain', mountain_cell),
-    ('coastal_periphery', coastal_periphery_cell)
+    ('coastal_periphery', coastal_periphery_cell),
+    ('castelldefels', castelldefels_cell)
 ]
 
 print(f"\n✓ Selected {len(test_cells)} test cells:")
@@ -436,9 +456,7 @@ for name, cell in test_cells:
     print(f"    Current population: {cell['population']:,.0f}")
     print(f"    Distance to center: {cell['dist_to_center']:,.0f} m")
 
-# ============================================================================
-# COMPUTE PAIRWISE DISTANCES BETWEEN CELLS
-# ============================================================================
+
 
 print("\n" + "-" * 80)
 print("Computing pairwise cell distances...")
@@ -454,9 +472,7 @@ distance_matrix = cdist(cell_centroids, cell_centroids, metric='euclidean')
 print(f"✓ Distance matrix computed: {n_cells} × {n_cells}")
 print(f"  Mean inter-cell distance: {distance_matrix[distance_matrix > 0].mean():,.0f} m")
 
-# ============================================================================
-# MAIN ANALYSIS: COMPUTE WORK FOR EACH TEST CELL
-# ============================================================================
+
 
 print("\n" + "=" * 80)
 print("COMPUTING GRAVITATIONAL WORK FOR EACH TEST CELL")
@@ -525,6 +541,7 @@ for test_idx, (test_name, test_cell) in enumerate(test_cells):
     print(f"\n  Computing routing-based gravitational work...")
     print(f"  (Using Dijkstra + precomputed edge work, matching wheight.py)")
     print(f"  (Including both outbound AND return trips)")
+    print(f"  (Total cost = vertical_work + λ * horizontal_distance)")
     
     # Get nearest node to test cell
     test_node = test_cell['nearest_node']
@@ -536,6 +553,9 @@ for test_idx, (test_name, test_cell) in enumerate(test_cells):
     print(f"    Processing {len(significant_destinations)} significant destinations...")
     
     total_work = 0.0
+    total_vertical_work = 0.0
+    total_horizontal_distance = 0.0
+    total_horizontal_cost = 0.0
     successful_routes = 0
     failed_routes = 0
     total_route_distance = 0.0
@@ -555,46 +575,49 @@ for test_idx, (test_name, test_cell) in enumerate(test_cells):
             # ================================================================
             path_outbound = nx.shortest_path(G, source=test_node, target=dest_node, weight='length')
             
-            # Calculate path length (same for outbound and return)
-            path_length = 0.0
+            # Calculate outbound path components
+            path_length_outbound = 0.0
+            path_vertical_outbound = 0.0
             for i in range(len(path_outbound) - 1):
                 u, v = path_outbound[i], path_outbound[i+1]
                 edge_keys = G[u][v].keys() if hasattr(G[u][v], 'keys') else [0]
                 key = list(edge_keys)[0]
                 edge_length = G[u][v][key].get('length', 0)
-                path_length += edge_length
+                path_length_outbound += edge_length
+                path_vertical_outbound += edge_work.get((u, v, key), 0.0)
             
-            total_route_distance += path_length
-            weighted_distance += path_length * n_trips
-            
-            # Sum work along outbound path
-            work_outbound = 0.0
-            for i in range(len(path_outbound) - 1):
-                u, v = path_outbound[i], path_outbound[i+1]
-                edge_keys = G[u][v].keys() if hasattr(G[u][v], 'keys') else [0]
-                key = list(edge_keys)[0]
-                work = edge_work.get((u, v, key), 0.0)
-                work_outbound += work
+            total_route_distance += path_length_outbound
+            weighted_distance += path_length_outbound * n_trips
             
             # ================================================================
             # RETURN TRIP: destination → test_cell
             # ================================================================
             path_return = nx.shortest_path(G, source=dest_node, target=test_node, weight='length')
             
-            # Sum work along return path
-            work_return = 0.0
+            # Calculate return path components
+            path_length_return = 0.0
+            path_vertical_return = 0.0
             for i in range(len(path_return) - 1):
                 u, v = path_return[i], path_return[i+1]
                 edge_keys = G[u][v].keys() if hasattr(G[u][v], 'keys') else [0]
                 key = list(edge_keys)[0]
-                work = edge_work.get((u, v, key), 0.0)
-                work_return += work
+                edge_length = G[u][v][key].get('length', 0)
+                path_length_return += edge_length
+                path_vertical_return += edge_work.get((u, v, key), 0.0)
             
             # ================================================================
             # TOTAL WORK: outbound + return
             # ================================================================
-            # Each trip includes both outbound and return journey
-            work_per_trip = work_outbound + work_return
+            # Each trip includes both outbound and return journey.
+            vertical_per_trip = path_vertical_outbound + path_vertical_return
+            horizontal_distance_per_trip = path_length_outbound + path_length_return
+            horizontal_cost_per_trip = HORIZONTAL_COST_WEIGHT * horizontal_distance_per_trip
+            work_per_trip = vertical_per_trip + horizontal_cost_per_trip
+
+            total_vertical_work += n_trips * vertical_per_trip
+            total_horizontal_distance += n_trips * horizontal_distance_per_trip
+            total_horizontal_cost += n_trips * horizontal_cost_per_trip
+
             work_ij = n_trips * work_per_trip
             total_work += work_ij
             
@@ -613,6 +636,9 @@ for test_idx, (test_name, test_cell) in enumerate(test_cells):
     print(f"      Failed routes: {failed_routes}")
     print(f"      Average route distance: {avg_route_distance:,.0f} m")
     print(f"      Weighted average distance: {avg_weighted_distance:,.0f} m (by trips)")
+    print(f"      Vertical work: {total_vertical_work:,.0f} J")
+    print(f"      Horizontal distance (weighted): {total_horizontal_distance:,.0f} m")
+    print(f"      Horizontal cost λ·d: {total_horizontal_cost:,.0f} J")
     print(f"      Total gravitational work: {total_work:,.0f} J")
     print(f"      Work per new resident: {total_work / NEW_RESIDENTS:,.0f} J/person")
     print(f"      Work per trip: {total_work / total_trips:,.0f} J/trip")
@@ -632,14 +658,15 @@ for test_idx, (test_name, test_cell) in enumerate(test_cells):
         'failed_routes': failed_routes,
         'avg_route_distance_m': avg_route_distance,
         'avg_weighted_distance_m': avg_weighted_distance,
+        'vertical_work_joules': total_vertical_work,
+        'horizontal_distance_weighted_m': total_horizontal_distance,
+        'horizontal_cost_joules': total_horizontal_cost,
         'total_work_joules': total_work,
         'work_per_resident': total_work / NEW_RESIDENTS,
         'work_per_trip': total_work / total_trips if total_trips > 0 else 0
     })
 
-# ============================================================================
-# COMPARATIVE ANALYSIS
-# ============================================================================
+
 
 print("\n" + "=" * 80)
 print("COMPARATIVE RESULTS")
@@ -674,9 +701,7 @@ for idx, row in results_df.iloc[1:].iterrows():
           f"+{row['work_increase_pct']:.1f}% more work "
           f"(+{row['work_increase_vs_best']:,.0f} J)")
 
-# ============================================================================
-# SAVE RESULTS
-# ============================================================================
+
 
 print("\n" + "-" * 80)
 print("Saving results...")
@@ -703,9 +728,7 @@ test_cells_gpkg = OUTPUT_DIR / f"{CITY}_test_cells.gpkg"
 test_cells_gdf.to_file(test_cells_gpkg, driver='GPKG')
 print(f"✓ Test cells saved to: {test_cells_gpkg}")
 
-# ============================================================================
-# VISUALIZATION
-# ============================================================================
+
 
 print("\nGenerating visualizations...")
 
@@ -716,10 +739,11 @@ nodes_ll = nodes_gdf.to_crs("EPSG:4326")
 
 # Define colors for each test cell (ranked by work)
 color_map = {
-    results_df.iloc[0]['test_cell_name']: "#3300FF",  # Best: Blue
-    results_df.iloc[1]['test_cell_name']: '#FFD700',  # 2nd: Yellow
-    results_df.iloc[2]['test_cell_name']: '#FFA500',  # 3rd: Orange
-    results_df.iloc[3]['test_cell_name']: '#FF0000',  # Worst: Red
+    results_df.iloc[0]['test_cell_name']: "#d7191c",  # Best: Red
+    results_df.iloc[1]['test_cell_name']: '#fdae61',  # 2nd: Green
+    results_df.iloc[2]['test_cell_name']: '#ffffbf',  # 3rd: Yellow
+    results_df.iloc[3]['test_cell_name']: '#abdda4',  # 4th: Orange
+    results_df.iloc[4]['test_cell_name']: '#2b83ba',  # 5th/Worst: Red
 }
 
 # Figure 1: Main map with highlighted test cells
@@ -729,7 +753,7 @@ fig, ax = plt.subplots(1, 1, figsize=(18, 16))
 cells_ll.plot(ax=ax, facecolor='#e0e0e0', edgecolor='none', alpha=0.3)
 
 # Network nodes
-nodes_ll.plot(ax=ax, color='#333333', markersize=0.8, alpha=0.4, label='Road network', zorder=10)
+# nodes_ll.plot(ax=ax, color='#333333', markersize=0.8, alpha=0.4, label='Road network', zorder=10)
 
 # Highlight test cells with colors
 for idx, row in test_cells_ll.iterrows():
@@ -744,7 +768,7 @@ for idx, row in test_cells_ll.iterrows():
     # Add marker at centroid
     ax.scatter(
         centroid.x, centroid.y,
-        c=color, s=2000, alpha=0.8,
+        c=color, s=4000, alpha=0.8,
         edgecolors='black', linewidth=3,
         zorder=110
     )
@@ -762,21 +786,37 @@ for idx, row in test_cells_ll.iterrows():
 
 # Add basemap
 try:
-    ctx.add_basemap(ax, crs=cells_ll.crs, source=ctx.providers.OpenStreetMap.Mapnik, 
-                    zoom=12, alpha=0.5, attribution=False)
+    ctx.add_basemap(ax, crs=cells_ll.crs, source=ctx.providers.CartoDB.Positron, 
+                    zoom=12, alpha=1, attribution=False)
 except:
     print("⚠ Could not add basemap")
 
 # Add legend with work values
 from matplotlib.patches import Patch
+
+def work_value_for_chart(work_joules: float) -> float:
+    if WORK_DISPLAY_MODE == "SCI":
+        return work_joules
+    return work_joules / 1e9  # GJ
+
+def work_label_for_text(work_joules: float) -> str:
+    if WORK_DISPLAY_MODE == "SCI":
+        return f"{work_joules:.2e} J"
+    return f"{work_joules / 1e9:.2f} GJ"
+
+def work_per_resident_label(work_per_resident_j: float) -> str:
+    if WORK_DISPLAY_MODE == "SCI":
+        return f"{work_per_resident_j:.2e} J/res"
+    return f"{work_per_resident_j / 1e6:.1f} MJ/res"
+
 legend_elements = []
 for idx, row in results_df.iterrows():
     color = color_map[row['test_cell_name']]
-    label = f"{row['test_cell_name'].upper()}: {row['total_work_joules']/1e6:.1f} MJ ({row['work_per_resident']:.0f} J/res)"
+    label = f"{row['test_cell_name'].upper()}: {work_label_for_text(row['total_work_joules'])} ({work_per_resident_label(row['work_per_resident'])})"
     legend_elements.append(Patch(facecolor=color, edgecolor='black', label=label, linewidth=2))
 
-ax.legend(handles=legend_elements, loc='lower right', fontsize=16, 
-          frameon=True, fancybox=True, shadow=True, framealpha=0.9)
+# ax.legend(handles=legend_elements, loc='lower right', fontsize=16, 
+#           frameon=True, fancybox=True, shadow=True, framealpha=0.9)
 
 # ax.set_title(
 #     f'Comparative Settlement Analysis - {CITY.upper()}\n'
@@ -784,9 +824,9 @@ ax.legend(handles=legend_elements, loc='lower right', fontsize=16,
 #     f'(Green = Most Efficient, Red = Least Efficient)',
 #     fontsize=18, fontweight='bold', pad=20
 # )
-ax.set_xlabel('Longitude', fontsize=20, fontweight='normal')
-ax.set_ylabel('Latitude', fontsize=20, fontweight='normal')
-ax.tick_params(axis='both', which='major', labelsize=16)
+# ax.set_xlabel('Longitude', fontsize=20, fontweight='normal')
+# ax.set_ylabel('Latitude', fontsize=20, fontweight='normal')
+ax.tick_params(axis='both', which='major', labelsize=26)
 ax.grid(True, alpha=0.2, linestyle='--')
 ax.set_aspect('equal')
 
@@ -802,7 +842,7 @@ colors_ranked = [color_map[name] for name in results_df['test_cell_name']]
 
 bars = ax.bar(
     range(len(results_df)),
-    results_df['total_work_joules'] / 1e6,  # Convert to MJ
+    results_df['total_work_joules'].apply(work_value_for_chart),
     color=colors_ranked,
     edgecolor='black',
     linewidth=2,
@@ -811,24 +851,38 @@ bars = ax.bar(
 
 # Add value labels on bars
 for i, (idx, row) in enumerate(results_df.iterrows()):
-    height = row['total_work_joules'] / 1e6
+    height = work_value_for_chart(row['total_work_joules'])
     ax.text(
         i, height + height * 0.02,
-        f"{row['total_work_joules']/1e6:.1f} MJ\n({row['work_per_resident']:,.0f} J/res)",
+        f"{work_label_for_text(row['total_work_joules'])}\n({work_per_resident_label(row['work_per_resident'])})",
         ha='center', va='bottom',
-        fontsize=16, fontweight='normal'
+        fontsize=24, fontweight='normal'
     )
 
+# Custom labels for xticks (edit as needed)
+xtick_label_map = {
+    'urban_center': 'Urban Core',
+    'foothills': 'Foothills',
+    'mountain': 'Terrassa',
+    'coastal_periphery': 'Matarò',
+    'castelldefels': 'Castelldefels'
+}
+
 ax.set_xticks(range(len(results_df)))
-ax.set_xticklabels([name.upper() for name in results_df['test_cell_name']], 
-                    fontsize=20, fontweight='normal')
-ax.set_ylabel('Total Gravitational Work (MJ)', fontsize=22, fontweight='normal')
-ax.tick_params(axis='y', which='major', labelsize=18)
-ax.set_title(
-    f'Energy Efficiency Comparison - {CITY.upper()}\n'
-    f'Total Work for {NEW_RESIDENTS:,} New Residents',
-    fontsize=24, fontweight='normal', pad=20
+ax.set_xticklabels(
+    [xtick_label_map.get(name, name.upper()) for name in results_df['test_cell_name']],
+    fontsize=24, fontweight='normal'
 )
+if WORK_DISPLAY_MODE == "SCI":
+    ax.set_ylabel(r'$W_{TOT}$' " (J)", fontsize=24, fontweight='normal')
+else:
+    ax.set_ylabel(r'$W_{TOT}$' " (GJ)", fontsize=24, fontweight='normal')
+ax.tick_params(axis='y', which='major', labelsize=20)
+# ax.set_title(
+#     f'Energy Efficiency Comparison - {CITY.upper()}\n'
+#     f'Total Work for {NEW_RESIDENTS:,} New Residents',
+#     fontsize=24, fontweight='normal', pad=20
+# )
 ax.grid(True, axis='y', alpha=0.3, linestyle='--')
 ax.spines['top'].set_visible(False)
 ax.spines['right'].set_visible(False)
@@ -838,9 +892,7 @@ plt.savefig(OUTPUT_DIR / f'{CITY}_work_comparison.png', dpi=300, bbox_inches='ti
 plt.savefig(OUTPUT_DIR / f'{CITY}_work_comparison.pdf', dpi=300, bbox_inches='tight')
 print(f"✓ Chart saved: {CITY}_work_comparison.png/pdf")
 
-# ============================================================================
-# FINAL SUMMARY
-# ============================================================================
+
 
 print("\n" + "=" * 80)
 print("ANALYSIS COMPLETE")

@@ -10,12 +10,14 @@ import networkx as nx
 import osmnx as ox
 import pandas as pd
 import geopandas as gpd
-from shapely.geometry import Point, box, Polygon
-from shapely.ops import unary_union, transform
+from shapely.geometry import box, Polygon
+from shapely.ops import unary_union
 from math import cos, sin, pi
 import json
 import multiprocessing as mp
 import numpy as np
+import rasterio
+import pyproj
 from scipy.spatial import cKDTree
 
 import matplotlib.pyplot as plt
@@ -47,26 +49,25 @@ _GRAPHS_DIR = None
 _CENTER_Y = None
 _CENTER_X = None
 _LAND_MASK = None
-_DEM_TREE = None
-_DEM_ALTS = None
+_LAND_PREP = None
+_DEM_FILE = None
 _PRODUCE_MAPS = True
 _CMAP = None
 
-def _init_worker(dem_file, graphs_dir, center_y, center_x, produce_maps=True, cmap_N=None):
-    global _GRAPHS_DIR, _CENTER_Y, _CENTER_X, _DEM_TREE, _DEM_ALTS, _PRODUCE_MAPS, _CMAP
+def _init_worker(graphs_dir, center_y, center_x, dem_file, land_mask, produce_maps=True, cmap_N=None):
+    global _GRAPHS_DIR, _CENTER_Y, _CENTER_X, _DEM_FILE, _LAND_MASK, _LAND_PREP, _PRODUCE_MAPS, _CMAP
     _GRAPHS_DIR = graphs_dir
     _CENTER_Y = center_y
     _CENTER_X = center_x
+    _DEM_FILE = dem_file
+    _LAND_MASK = land_mask
+    from shapely.prepared import prep
+    _LAND_PREP = prep(land_mask)
     _PRODUCE_MAPS = bool(produce_maps)
     if cmap_N is None:
         _CMAP = plt.get_cmap('Set1')
     else:
         _CMAP = plt.get_cmap('Set1', int(cmap_N))
-    reader = DEMReader(dem_file)
-    dem_gdf = reader.get_pixel_centroids()
-    dem_coords = np.vstack((dem_gdf.geometry.y.values, dem_gdf.geometry.x.values)).T
-    _DEM_ALTS = dem_gdf['alt'].values.astype(float)
-    _DEM_TREE = cKDTree(dem_coords)
 
 def is_dem_complete(path):
     return os.path.exists(path) and os.path.getsize(path) > 1e6
@@ -108,9 +109,7 @@ def load_fua_polygon(gpkg_path, bbox_poly, city_key=None):
     try:
         fua_4326 = fua_gdf.to_crs("EPSG:4326")
     except Exception:
-        # If CRS is missing, assume it's already 4326
         fua_4326 = fua_gdf
-    # Filter FUAs intersecting the bbox polygon
     try:
         candidates = fua_4326[fua_4326.intersects(bbox_poly)]
     except Exception as e:
@@ -125,35 +124,24 @@ def load_fua_polygon(gpkg_path, bbox_poly, city_key=None):
         poly = candidates.unary_union
     return poly
 
-def assign_altitudes(G, dem_reader):
-    dem_gdf = dem_reader.get_pixel_centroids()
-    dem_coords = np.vstack((dem_gdf.geometry.y.values, dem_gdf.geometry.x.values)).T
-    dem_alts = dem_gdf['alt'].values
-    tree = cKDTree(dem_coords)
+def assign_altitudes(G, dem_path):
+    return assign_altitudes_rasterio(G, dem_path)
 
+def assign_altitudes_rasterio(G, dem_path):
     nodes = list(G.nodes(data=True))
-    node_coords = np.array([[data['y'], data['x']] for _, data in nodes])
-    dists, idxs = tree.query(node_coords, k=1)
-    missing = 0
+    coords = [(d["x"], d["y"]) for _, d in nodes]  # lon,lat
 
-    for (node, data), alt_idx in zip(nodes, idxs):
-        z = float(dem_alts[alt_idx])
-        data['z'] = z
-        if z == 0:
-            missing += 1
-    if missing:
-        logger.warning(f"{missing} nodes without assigned altitude.")
-    return missing
+    with rasterio.open(dem_path) as src:
+        if src.crs and src.crs.to_string() != "EPSG:4326":
+            tr = pyproj.Transformer.from_crs("EPSG:4326", src.crs, always_xy=True)
+            coords = [tr.transform(lon, lat) for lon, lat in coords]
 
-def assign_altitudes_from_tree(G, tree, dem_alts):
-    nodes = list(G.nodes(data=True))
-    node_coords = np.array([[data['y'], data['x']] for _, data in nodes])
-    _, idxs = tree.query(node_coords, k=1)
+        zs = [v[0] for v in src.sample(coords)]
+
     missing = 0
-    for (node, data), alt_idx in zip(nodes, idxs):
-        z = float(dem_alts[int(alt_idx)])
-        data['z'] = z
-        if z == 0:
+    for (n, d), z in zip(nodes, zs):
+        d["z"] = float(z) if z is not None and np.isfinite(z) else 0.0
+        if d["z"] == 0.0:
             missing += 1
     if missing:
         logger.warning(f"{missing} nodes without assigned altitude.")
@@ -252,6 +240,7 @@ def process_folder(folder, base_path, offsets, rotations, scales, cmap, api_key,
         logger.info(f"[{folder}] All outputs already exist; skipping.")
         return
 
+    logger.info(f"[{folder}] Loading CSV file: {csv_file}")
     df = pd.read_csv(csv_file, sep=';').dropna(subset=['geometry'])
     df['geometry'] = df['geometry'].apply(load_wkt)
     gdf = gpd.GeoDataFrame(df, geometry='geometry', crs='EPSG:4326')
@@ -271,22 +260,26 @@ def process_folder(folder, base_path, offsets, rotations, scales, cmap, api_key,
     ]
 
     os.makedirs(dem_dir, exist_ok=True)
+    logger.info(f"[{folder}] Checking DEM file: {dem_file}")
     if not is_dem_complete(dem_file):
+        logger.info(f"[{folder}] DEM incomplete, starting download...")
         download_dem(dem_file, ext_bounds, api_key)
+    else:
+        logger.info(f"[{folder}] DEM file already complete")
 
+    logger.info(f"[{folder}] Initializing DEMReader...")
     dem_reader = DEMReader(dem_file)
     logger.info(f"[{folder}] DEMReader initialized for {dem_file}")
 
+    logger.info(f"[{folder}] Loading city bbox polygon from {json_bbox}")
     city_poly = load_metropolis_bbox(json_bbox, folder)
     logger.info(f"[{folder}] City bbox polygon loaded with bounds {city_poly.bounds}")
 
-    # Optionally replace bbox with GHSL FUA polygon intersecting bbox
     poly_for_graph = city_poly
     if use_fua:
         default_fua = "/home/fbellisardi/code/topolity/vars/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg"
         fua_gpkg = fua_path or (default_fua if os.path.exists(default_fua) else None)
         if fua_gpkg is None:
-            # Try alternative known locations
             alt_paths = [
                 "/home/fbellisardi/code/topolity/data/extra/ghs_fua_v1/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg",
                 "/home/fbellisardi/code/data/extra/ghs_fua_v1/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg",
@@ -308,21 +301,19 @@ def process_folder(folder, base_path, offsets, rotations, scales, cmap, api_key,
 
     minx, miny, maxx, maxy = poly_for_graph.bounds
 
+    logger.info(f"[{folder}] Loading global land shapefile...")
     raw_dir = "/data/workspaces/fbellisardi/land"
     shp_file = os.path.join(raw_dir, "ne_10m_land.shp")
     land_global = gpd.read_file(shp_file).to_crs("EPSG:4326")
+    logger.info(f"[{folder}] Land shapefile loaded, computing union...")
     land_mask = land_global.geometry.union_all()
+    logger.info(f"[{folder}] Land mask union computed")
 
-    land_shp = os.path.join(folder_path, 'land', f'{folder}_clipped_land.shp')
-
+    logger.info(f"[{folder}] Clipping land to bbox...")
     bbox_gdf = gpd.GeoDataFrame({'geometry': [poly_for_graph]},crs="EPSG:4326")
     clipped = gpd.overlay(land_global, bbox_gdf, how='intersection')
-    os.makedirs(os.path.join(folder_path, 'land'), exist_ok=True)
-    clipped.to_file(land_shp)
-    logger.info(f"[{folder}] Created {land_shp} by clipping the bbox.")
-
-    land_gdf = gpd.read_file(land_shp).to_crs('EPSG:4326')
-    polygon = land_gdf.geometry.union_all()
+    polygon = clipped.geometry.union_all()
+    logger.info(f"[{folder}] Clipped land polygon to bbox (in-memory).")
 
     graph_original_pkl = os.path.join(graphs_dir, 'graph_original.pkl')
     if os.path.exists(graph_original_pkl):
@@ -330,7 +321,7 @@ def process_folder(folder, base_path, offsets, rotations, scales, cmap, api_key,
             G = pickle.load(f)
         logger.info(f"[{folder}] Loaded existing original graph.")
         if all(data.get('z', 0) == 0 for _, data in G.nodes(data=True)):
-           missing = assign_altitudes(G, dem_reader)
+           missing = assign_altitudes_rasterio(G, dem_file)
            logger.info(f"[{folder}] Re-assigned altitudes to original graph, missing: {missing}")
            with open(graph_original_pkl, 'wb') as f:
                pickle.dump(G, f)
@@ -357,7 +348,7 @@ def process_folder(folder, base_path, offsets, rotations, scales, cmap, api_key,
             cc = max(nx.strongly_connected_components(G), key=len)
             G = G.subgraph(cc).copy()
 
-        missing = assign_altitudes(G, dem_reader)
+        missing = assign_altitudes_rasterio(G, dem_file)
         logger.info(f"[{folder}] Assigned altitudes to original graph, missing: {missing}")
 
         num_nodes = G.number_of_nodes()
@@ -411,6 +402,8 @@ def process_folder(folder, base_path, offsets, rotations, scales, cmap, api_key,
                      'offset_y': 0.0})
     
     for idx, off in enumerate(offsets[1:], start=1):
+        if off == (0.0, 0.0):  # Skip identity translation
+            continue
         name = f'translated_{idx}'
         variants.append({'variant': name,
                          'type': 'translate',
@@ -418,11 +411,15 @@ def process_folder(folder, base_path, offsets, rotations, scales, cmap, api_key,
                          'offset_x': off[0],
                          'offset_y': off[1]})
     for angle in rotations:
+        if angle == 0:  # Skip identity rotation
+            continue
         name = f'rot_{angle}'
         variants.append({'variant': name,
                          'type': 'rotate',
                          'angle_deg': angle})
     for scale in scales:
+        if scale == 1.0:  # Skip identity scale
+            continue
         variants.append({'variant': f'scale_x_{scale}',
                          'type': 'scale',
                          'scale_factor': scale,
@@ -441,13 +438,15 @@ def process_folder(folder, base_path, offsets, rotations, scales, cmap, api_key,
     total_start = time.time()
     workers = workers or mp.cpu_count()
     logger.info(f"[{folder}] Starting variant processing on {workers} cores")
-    global _G, _LAND_MASK
+    
+    global _G, _LAND_MASK, _LAND_PREP
     _G = G
     _LAND_MASK = land_mask
+    
     results = []
     cmap_N = getattr(cmap, 'N', len(variants))
     if workers == 1:
-        _init_worker(dem_file, graphs_dir, center_y, center_x, produce_maps, cmap_N)
+        _init_worker(graphs_dir, center_y, center_x, dem_file, land_mask, produce_maps, cmap_N)
         global _CMAP
         _CMAP = plt.get_cmap('Set1', cmap_N)
         for a in args_list:
@@ -455,7 +454,7 @@ def process_folder(folder, base_path, offsets, rotations, scales, cmap, api_key,
     else:
         with mp.Pool(processes=workers,
                      initializer=_init_worker,
-                     initargs=(dem_file, graphs_dir, center_y, center_x, produce_maps, cmap_N)) as pool:
+                     initargs=(graphs_dir, center_y, center_x, dem_file, land_mask, produce_maps, cmap_N)) as pool:
             results = pool.map(process_variant, args_list)
     total_end = time.time()
     logger.info(f"[{folder}] Completed all variants in {total_end - total_start:.2f} seconds")
@@ -517,30 +516,45 @@ def process_variant(args):
             G_var = pickle.load(f)
     else:
         if meta['type'] == 'translate':
-            G_var = translate_graph(_G.copy(), meta['offset'])
+            if meta['offset'] == (0.0, 0.0):
+                G_var = _G.copy()
+            else:
+                G_var = translate_graph(_G.copy(), meta['offset'])
         elif meta['type'] == 'rotate':
-            G_var = rotate_graph(_G.copy(), meta['angle_deg'])
+            if meta['angle_deg'] == 0:
+                G_var = _G.copy()
+            else:
+                G_var = rotate_graph(_G.copy(), meta['angle_deg'])
         elif meta['type'] == 'scale':
-            G_var = scale_graph(
-                _G.copy(),
-                meta['scale_factor'],
-                axis=meta.get('axis','both')
-            )
+            if meta['scale_factor'] == 1.0:
+                G_var = _G.copy()
+            else:
+                G_var = scale_graph(
+                    _G.copy(),
+                    meta['scale_factor'],
+                    axis=meta.get('axis','both')
+                )
         else:
             G_var = _G.copy()
-        if any(not Point(d['x'], d['y']).within(_LAND_MASK) for _, d in G_var.nodes(data=True)):
-            logger.warning(f"Variant {variant} has nodes outside the land mask, skipping.")
+        
+        xs = [d["x"] for _, d in G_var.nodes(data=True)]
+        ys = [d["y"] for _, d in G_var.nodes(data=True)]
+        bbox = box(min(xs), min(ys), max(xs), max(ys))
+        if not _LAND_PREP.contains(bbox):
+            logger.warning(f"Variant {variant} bounding box outside land mask, skipping.")
             return None
-        missing = assign_altitudes_from_tree(G_var, _DEM_TREE, _DEM_ALTS)
+        
+        missing = assign_altitudes_rasterio(G_var, _DEM_FILE)
         for u, v, d in G_var.edges(data=True):
             d.setdefault('length', d.get('length', 1))
+        
         with open(pkl_path, 'wb') as f:
             pickle.dump(G_var, f)
+        logger.info(f"Variant {variant} saved to disk, freeing memory")
     stats = compute_graph_statistics(G_var)
     stats['variant'] = variant
     stats.update({k: v for k, v in meta.items() if k not in ['variant', 'type', 'offset']})
     stats['missing_altitude'] = sum(1 for _,d in G_var.nodes(data=True) if d.get('z',0)==0)
-    # HTML map generation removed for performance - use separate map_generator.py script
     variant_end = time.time()
     logger.info(f"Variant {variant} completed in {variant_end - variant_start:.2f} seconds")
     return stats
