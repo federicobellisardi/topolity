@@ -47,29 +47,26 @@ def generate_city_bbox_maps(city_folder, base_path):
     folder_path = os.path.join(base_path, city_folder)
     graphs_dir = os.path.join(folder_path, 'graphs')
     
-    # Load city data
     csv_file = os.path.join(folder_path, 'data_useful.csv')
     if not os.path.exists(csv_file):
         logger.error(f"[{city_folder}] No data_useful.csv found")
         return
-    
+
     df = pd.read_csv(csv_file, sep=';').dropna(subset=['geometry'])
     df['geometry'] = df['geometry'].apply(load_wkt)
     gdf = gpd.GeoDataFrame(df, geometry='geometry', crs='EPSG:4326')
-    
+
     minx, miny, maxx, maxy = gdf.total_bounds
     center_y = (miny + maxy) / 2
     center_x = (minx + maxx) / 2
-    
-    # Load city polygon
+
     json_bbox = "/data/workspaces/fbellisardi/metropolis.json"
     try:
         city_poly = load_metropolis_bbox(json_bbox, city_folder)
     except KeyError:
         logger.error(f"[{city_folder}] City not found in metropolis.json")
         return
-    
-    # Generate original city bbox map
+
     folium_map = folium.Map(location=[center_y, center_x], zoom_start=13)
     
     for coord_list in get_polygon_coordinates(city_poly):
@@ -113,45 +110,38 @@ def generate_variant_maps(city_folder, base_path):
     if not os.path.exists(stats_file):
         logger.error(f"[{city_folder}] No graph_stats.csv found")
         return
-    
-    # Load variant statistics
+
     stats_df = pd.read_csv(stats_file)
-    
-    # Load city data for center coordinates
+
     csv_file = os.path.join(folder_path, 'data_useful.csv')
     df = pd.read_csv(csv_file, sep=';').dropna(subset=['geometry'])
     df['geometry'] = df['geometry'].apply(load_wkt)
     gdf = gpd.GeoDataFrame(df, geometry='geometry', crs='EPSG:4326')
-    
+
     minx, miny, maxx, maxy = gdf.total_bounds
     center_y = (miny + maxy) / 2
     center_x = (minx + maxx) / 2
-    
-    # Set up colormap
+
     cmap = plt.get_cmap('Set1', len(stats_df))
-    
-    # Generate map for each variant
+
     for idx, row in stats_df.iterrows():
         variant = row['variant']
         pkl_path = os.path.join(graphs_dir, f'graph_{variant}.pkl')
-        
+
         if not os.path.exists(pkl_path):
             logger.warning(f"[{city_folder}] Pickle file not found for variant {variant}")
             continue
-        
-        # Load graph
+
         try:
             with open(pkl_path, 'rb') as f:
                 G_var = pickle.load(f)
         except Exception as e:
             logger.error(f"[{city_folder}] Could not load graph for variant {variant}: {e}")
             continue
-        
-        # Create map
+
         variant_map = folium.Map(location=[center_y, center_x], zoom_start=13)
         color = mcolors.to_hex(cmap(idx))
-        
-        # Add edges to map
+
         edge_count = 0
         for u, v in G_var.edges():
             try:
@@ -162,8 +152,7 @@ def generate_variant_maps(city_folder, base_path):
             except KeyError as e:
                 logger.warning(f"[{city_folder}] Missing node coordinates in variant {variant}: {e}")
                 continue
-        
-        # Save map
+
         variant_map_file = os.path.join(graphs_dir, f'graph_{variant}_map.html')
         variant_map.save(variant_map_file)
         logger.info(f"[{city_folder}] Saved variant map for {variant} ({edge_count} edges)")
@@ -179,27 +168,22 @@ def generate_overview_map(city_folder, base_path):
     if not os.path.exists(stats_file):
         logger.error(f"[{city_folder}] No graph_stats.csv found")
         return
-    
-    # Load variant statistics
+
     stats_df = pd.read_csv(stats_file)
-    
-    # Load city data for center coordinates
+
     csv_file = os.path.join(folder_path, 'data_useful.csv')
     df = pd.read_csv(csv_file, sep=';').dropna(subset=['geometry'])
     df['geometry'] = df['geometry'].apply(load_wkt)
     gdf = gpd.GeoDataFrame(df, geometry='geometry', crs='EPSG:4326')
-    
+
     minx, miny, maxx, maxy = gdf.total_bounds
     center_y = (miny + maxy) / 2
     center_x = (minx + maxx) / 2
-    
-    # Create overview map
+
     overview_map = folium.Map(location=[center_y, center_x], zoom_start=12)
-    
-    # Set up colormap
+
     cmap = plt.get_cmap('Set1', len(stats_df))
-    
-    # Add each variant as a separate layer
+
     for idx, row in stats_df.iterrows():
         variant = row['variant']
         pkl_path = os.path.join(graphs_dir, f'graph_{variant}.pkl')
@@ -214,11 +198,10 @@ def generate_overview_map(city_folder, base_path):
             logger.warning(f"[{city_folder}] Could not load graph for variant {variant}: {e}")
             continue
         
-        # Create feature group for this variant
         fg = FeatureGroup(name=f'{variant} ({G_var.number_of_nodes()} nodes)')
         color = mcolors.to_hex(cmap(idx))
-        
-        # Add edges to feature group (sample for performance)
+
+        # Sample edges for performance on large graphs
         edges = list(G_var.edges())
         sample_size = min(len(edges), 1000)  # Limit edges for performance
         import random
@@ -233,11 +216,9 @@ def generate_overview_map(city_folder, base_path):
                 continue
         
         fg.add_to(overview_map)
-    
-    # Add layer control
+
     folium.LayerControl().add_to(overview_map)
-    
-    # Save overview map
+
     overview_map_file = os.path.join(graphs_dir, f'{city_folder}_variants_overview.html')
     overview_map.save(overview_map_file)
     logger.info(f"[{city_folder}] Saved variants overview map to {overview_map_file}")
@@ -266,14 +247,12 @@ def main():
     
     city_folder = args.city
     base_path = args.base_path
-    
-    # Check if city folder exists
+
     folder_path = os.path.join(base_path, city_folder)
     if not os.path.isdir(folder_path):
         logger.error(f"City folder not found: {folder_path}")
         return
-    
-    # Create graphs directory if it doesn't exist
+
     graphs_dir = os.path.join(folder_path, 'graphs')
     os.makedirs(graphs_dir, exist_ok=True)
     
@@ -288,8 +267,7 @@ def main():
         
         if args.overview_only or args.all:
             generate_overview_map(city_folder, base_path)
-        
-        # Update maps index
+
         try:
             from tools.build_maps_index import process_city as _build_maps_index
             _build_maps_index(base_path, city_folder, iframes=False)

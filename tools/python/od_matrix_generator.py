@@ -111,14 +111,12 @@ class CostModel:
         Normalize each row to get probabilities and then compute costs as -log(probability).
         Diagonal entries (i==j) are set to 0.
         """
-        # Normalize each row so that it sums to 1
         row_sums = od_matrix.sum(axis=1)
         prob_matrix = od_matrix.div(row_sums, axis=0).fillna(0)
         # Avoid log(0) by replacing zeros with a small number (except on the diagonal)
         small_val = 1e-12
         prob_matrix_safe = prob_matrix.replace(0, small_val)
         cost_matrix = -np.log(prob_matrix_safe)
-        # Set diagonal back to 0 (i.e. cost from node to itself)
         for node in cost_matrix.index:
             cost_matrix.at[node, node] = 0
         return cost_matrix.astype(float)
@@ -136,7 +134,6 @@ class CostModel:
                     d = dist_matrix.at[i, j]
                     od_matrix.at[i, j] = (masses[i] * masses[j]) / (d ** 2 + epsilon)
         od_matrix = od_matrix.fillna(0)
-        # Normalize and convert probabilities to cost
         cost_matrix = self._normalize_and_transform(od_matrix)
         return cost_matrix
 
@@ -176,7 +173,6 @@ class CostModel:
                     utilities.append(-np.inf)
                 else:
                     utilities.append(beta * dist_matrix.at[i, j])
-            # Compute softmax probabilities for destination choices from i
             exp_utilities = np.exp(np.array(utilities) - np.max(utilities))
             probs = exp_utilities / np.sum(exp_utilities)
             for idx, j in enumerate(nodes):

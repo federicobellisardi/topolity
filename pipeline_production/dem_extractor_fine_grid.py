@@ -294,7 +294,6 @@ def load_osm_polygon(city_key: str, cache_dir: str) -> "Polygon | None":
         gdf = ox.geocode_to_gdf(query)
         gdf = gdf.to_crs("EPSG:4326")
         poly = gdf.geometry.union_all()
-        # Save to cache
         gdf.to_file(cache_file, driver="GeoJSON")
         logger.info(
             f"[{city_key}] OSM boundary downloaded for '{query}', "
@@ -876,7 +875,7 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
                    seed=None, use_fua=False, fua_path=None, resume=False,
                    low_memory=False, dem_mode='auto', extra_translation_angles=None,
                    polygon_source='fua'):
-    # ── Polygon-source suffix ─────────────────────────────────────────────────
+    # Polygon-source suffix:
     # 'fua'  → default paths: graphs_fine_grid/, land/, graphs/
     # 'osm'  → separate paths: graphs_fine_grid_osm/, land_osm/, graphs_osm/
     _sfx = "" if polygon_source == "fua" else f"_{polygon_source}"
@@ -897,7 +896,6 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
     dem_file = os.path.join(dem_dir, f"{folder}_dem.tif")
     stats_file = os.path.join(fine_grid_dir, 'fine_grid_stats.csv')
 
-    # Load data
     df = pd.read_csv(csv_file, sep=';').dropna(subset=['geometry'])
     df['geometry'] = df['geometry'].apply(load_wkt)
     gdf = gpd.GeoDataFrame(df, geometry='geometry', crs='EPSG:4326')
@@ -908,8 +906,6 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
     center_x = (minx + maxx) / 2
 
     # Calculate extended bounds for DEM (initial estimate before knowing exact offsets)
-    # Use maximum expected offset for DEM download
-
     max_distance_m = step_meters * num_points
     meters_per_deg = 111000.0
     max_offset_deg = max_distance_m / meters_per_deg
@@ -929,7 +925,7 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
         selected_dem_mode = 'tree'
     logger.info(f"[{folder}] DEM mode: {selected_dem_mode}")
 
-    # ── Load city bbox / FUA BEFORE reading the DEM ───────────────────────────
+    # Load city bbox / FUA before reading the DEM.
     # The DEM TIF was downloaded for a large area (CSV bounds + 50 % buffer).
     # We only need altitudes for nodes inside the FUA + max translation offset.
     # Loading the FUA first lets us clip the raster read to that window →
@@ -940,7 +936,7 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
     poly_for_graph = city_bbox_poly
 
     if polygon_source == 'osm':
-        # ── OSM municipality boundary ──────────────────────────────────────────
+        # OSM municipality boundary
         osm_cache_dir = os.path.join(folder_path, 'land_osm')
         osm_poly = load_osm_polygon(folder, osm_cache_dir)
         if osm_poly is not None:
@@ -950,7 +946,7 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
             logger.warning(f"[{folder}] OSM polygon unavailable; falling back to bbox")
 
     elif use_fua:
-        # ── GHSL FUA polygon ───────────────────────────────────────────────────
+        # GHSL FUA polygon
         default_fua = "/home/fbellisardi/code/topolity/vars/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg"
         fua_gpkg = fua_path or (default_fua if os.path.exists(default_fua) else None)
         if fua_gpkg is None:
@@ -1222,8 +1218,7 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
         with open(original_pkl, 'rb') as f:
             G = pickle.load(f)
         logger.info(f"[{folder}] Loaded existing original graph")
-        
-        # Ensure altitudes are assigned
+
         if all(data.get('z', 0) == 0 for _, data in list(G.nodes(data=True))[:10]):
             if selected_dem_mode == 'tree':
                 missing = assign_altitudes_from_tree(G, dem_tree, dem_alts)
@@ -1576,19 +1571,16 @@ def process_variant(args):
             _ = assign_altitudes_from_tree(G_var, _DEM_TREE, _DEM_ALTS)
         else:
             _ = assign_altitudes_from_raster(G_var, _DEM_SRC, _DEM_TRANSFORMER)
-        
-        # Ensure edge lengths exist
+
         for u, v, d in G_var.edges(data=True):
             if "length" not in d:
                 d["length"] = 1.0
-        
-        # Save pickle
+
         with open(pkl_path, 'wb') as f:
             pickle.dump(G_var, f)
-        
+
         on_land = True
 
-    # Compute statistics
     stats = compute_graph_statistics(G_var)
     stats['variant'] = variant
     stats['type'] = meta['type']

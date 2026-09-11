@@ -101,7 +101,6 @@ def coords_to_metric(coords: np.ndarray, transformer=None) -> np.ndarray:
     return np.column_stack([x_m, y_m])
 
 
-
 def compute_lambda_from_fuel_params(
     consumption_l_per_100km: Tuple[float, float] = (5.0, 8.0),
     energy_mj_per_l: float = 36.0,
@@ -201,13 +200,13 @@ def load_dem_reader(dem_file: Path):
         import rasterio
         if dem_file.exists():
             src = rasterio.open(str(dem_file))
-            print(f"✓ Loaded DEM: {dem_file}")
+            print(f"Loaded DEM: {dem_file}")
             return src
         else:
-            print(f"⚠ DEM not found: {dem_file}")
+            print(f"DEM not found: {dem_file}")
             return None
     except ImportError:
-        print("⚠ rasterio not installed, cannot sample elevations")
+        print("rasterio not installed, cannot sample elevations")
         return None
 
 
@@ -327,7 +326,6 @@ def compute_edge_vertical_gain_m(
         })
 
     return vertical_gain_m, segment_results
-
 
 
 def compute_edge_geometry_length(
@@ -461,13 +459,11 @@ class ODWorkEvaluator:
             print(f"  using_metric_transformer = {self.metric_transformer is not None}")        
         
 
-        # Map nodes to sequential IDs
         self.node2id = {n: i for i, n in enumerate(G.nodes())}
         self.id2node = {i: n for n, i in self.node2id.items()}
 
         # Precompute per-edge positive vertical gain [m]
         self.arc_vertical_gain_m = {}
-        # store both 2D (planar) and 3D lengths for each arc
         self.arc_length_2d = {}
         self.arc_length_3d = {}
         self.arc_vertical_gain_segments = {} if keep_segments else None
@@ -666,7 +662,6 @@ class ODWorkEvaluator:
                                 od_hol_df: pd.DataFrame,
                                 horizontal_cost_weight: float = HORIZONTAL_COST_WEIGHT) -> Tuple[float, float, float]:
         """Compute vertical work, horizontal travel cost and their weighted sum."""
-        # Group destinations by origin for efficiency
         od_by_origin = {}
 
         for origin, dest, flow in od_work_df.itertuples(index=False, name=None):
@@ -676,12 +671,9 @@ class ODWorkEvaluator:
             od_by_origin.setdefault(origin, {}).setdefault(dest, [0.0, 0.0])[1] += float(flow)
 
         total_vertical = 0.0
-        # horizontal totals: keep 2D for backward compatibility
         total_horizontal_2d = 0.0
-        # also accumulate 3D distances
         total_horizontal_3d = 0.0
 
-        # For each origin, run Dijkstra once
         for origin_cell, dest_map in tqdm(od_by_origin.items(), desc="OD shortest paths", leave=False):
             src_node = cell_map.get(origin_cell)
             if src_node is None:
@@ -702,7 +694,6 @@ class ODWorkEvaluator:
                 path = runner.getPath(tid)
                 if not path:
                     continue
-                # Sum uphill work and horizontal travel along the path
                 path_vertical = 0.0
                 path_length_2d = 0.0
                 path_length_3d = 0.0
@@ -728,7 +719,6 @@ class ODWorkEvaluator:
         total_combined_2d = vertical_energy_J + horizontal_energy_2d_J
         
         
-        # keep original return semantics (vertical, horizontal, combined) using 2D
         return total_vertical, total_horizontal_2d, total_combined_2d
 
     def compute_total_cost_pair_all(self, cell_map: Dict[int, int],
@@ -739,7 +729,6 @@ class ODWorkEvaluator:
 
         Returns: (vertical, horizontal_2d, combined_2d, horizontal_3d, combined_3d)
         """
-        # Group destinations by origin for efficiency
         od_by_origin = {}
 
         for origin, dest, flow in od_work_df.itertuples(index=False, name=None):
@@ -752,7 +741,6 @@ class ODWorkEvaluator:
         total_horizontal_2d = 0.0
         total_horizontal_3d = 0.0
 
-        # For each origin, run Dijkstra once
         for origin_cell, dest_map in tqdm(od_by_origin.items(), desc="OD shortest paths", leave=False):
             src_node = cell_map.get(origin_cell)
             if src_node is None:
@@ -773,7 +761,6 @@ class ODWorkEvaluator:
                 path = runner.getPath(tid)
                 if not path:
                     continue
-                # Sum uphill work and both horizontal distances along the path
                 path_vertical = 0.0
                 path_length_2d = 0.0
                 path_length_3d = 0.0
@@ -914,7 +901,6 @@ def analyze_graphs(graph_files: List[Path], dem_src, output_csv: Path, city: str
     Returns:
         DataFrame with columns: filename, variant_type, parameter, total_work, vertical_work, horizontal_work, num_nodes, num_edges
     """
-    # Determine already computed files if resuming
     existing_done = set()
     wrote_header = False
     allowed_filenames = {path.name for path in graph_files}
@@ -977,15 +963,12 @@ def analyze_graphs(graph_files: List[Path], dem_src, output_csv: Path, city: str
     to_process = [p for p in graph_files if (not resume or p.name not in existing_done)]
     print(f"\nAnalyzing {len(to_process)} graphs (skipped {len(graph_files) - len(to_process)} already done)...")
     
-    # Incremental append to CSV to persist partial progress
-    # Prepare OD data paths
     base_dir = Path(f"/home/fbellisardi/code/topolity/data/data_processed/{city}")
     cells_dir = base_dir / f"{city}_basic_model/1000_cells"
     cells_file = cells_dir / "cell_coordinates.csv"
     od_w_file = cells_dir / "od_matrix_working_day.csv"
     od_h_file = cells_dir / "od_matrix_holiday.csv"
 
-    # Load cells and OD flows (minimal schema without CRS transform)
     def load_cells_minimal(path: Path) -> pd.DataFrame:
         """Load cells file and convert bbox to lon/lat like wheight.py does."""
         df = pd.read_csv(path)
@@ -994,13 +977,11 @@ def analyze_graphs(graph_files: List[Path], dem_src, output_csv: Path, city: str
 
         transformer = Transformer.from_crs(CELLS_CRS, "EPSG:4326", always_xy=True)
 
-        # Determine bbox columns and convert to lon/lat if needed
         if set(['x_min', 'y_min', 'x_max', 'y_max']).issubset(df.columns):
             lon_min, lat_min = transformer.transform(df['x_min'].to_numpy(), df['y_min'].to_numpy())
             lon_max, lat_max = transformer.transform(df['x_max'].to_numpy(), df['y_max'].to_numpy())
             df['lon_min'], df['lat_min'], df['lon_max'], df['lat_max'] = lon_min, lat_min, lon_max, lat_max
         elif set(['lon_min', 'lat_min', 'lon_max', 'lat_max']).issubset(df.columns):
-            # If lon/lat columns look like projected meters, convert them
             if df['lon_min'].abs().max() > 360:  # heuristically detect EPSG:3857 meters
                 lon_min, lat_min = transformer.transform(df['lon_min'].to_numpy(), df['lat_min'].to_numpy())
                 lon_max, lat_max = transformer.transform(df['lon_max'].to_numpy(), df['lat_max'].to_numpy())
@@ -1031,7 +1012,6 @@ def analyze_graphs(graph_files: List[Path], dem_src, output_csv: Path, city: str
     od_work = load_od_minimal(od_w_file)
     od_hol = load_od_minimal(od_h_file)
 
-    # Map cells to nearest graph nodes inside bounding box
     def map_cells_to_nodes(G: nx.MultiDiGraph, cell_df: pd.DataFrame) -> Dict[int, int]:
         xs = np.array([data.get('x', data.get('lon')) for _, data in G.nodes(data=True)])
         ys = np.array([data.get('y', data.get('lat')) for _, data in G.nodes(data=True)])
@@ -1186,7 +1166,6 @@ def analyze_graphs(graph_files: List[Path], dem_src, output_csv: Path, city: str
         )
 
         if save_segments:
-            # Save segment-level work to CSV only when explicitly requested.
             variant_name = filename.replace('graph_', '').replace('.pkl', '')
             seg_work_csv = output_csv.parent / f'arc_work_segments_{variant_name}.csv'
             with open(seg_work_csv, 'w', newline='') as seg_f:
@@ -1207,7 +1186,6 @@ def analyze_graphs(graph_files: List[Path], dem_src, output_csv: Path, city: str
                         })
             print(f"    Segment work saved → {seg_work_csv.name}")
 
-        # Append row to CSV immediately
         try:
             pd.DataFrame([row]).to_csv(output_csv, mode='a', header=not wrote_header, index=False)
             wrote_header = True
@@ -1220,12 +1198,10 @@ def analyze_graphs(graph_files: List[Path], dem_src, output_csv: Path, city: str
         if idx % max(1, int(gc_every)) == 0:
             gc.collect()
     
-    # Load merged dataframe from CSV (ensures de-duplication if needed)
     try:
         merged_df = pd.read_csv(output_csv)
         if 'filename' in merged_df.columns:
             merged_df = merged_df.drop_duplicates(subset=['filename'], keep='last')
-        # Ensure numeric columns are properly typed
         for col in ['parameter', 'total_work', 'num_nodes', 'num_edges']:
             if col in merged_df.columns:
                 merged_df[col] = pd.to_numeric(merged_df[col], errors='coerce')
@@ -1247,7 +1223,6 @@ def analyze_graphs(graph_files: List[Path], dem_src, output_csv: Path, city: str
                 merged_df[col] = pd.to_numeric(merged_df[col], errors='coerce')
         return merged_df
     except Exception:
-        # Fallback: return in-memory results
         df = pd.DataFrame(new_rows)
         return df
 
@@ -1259,17 +1234,14 @@ def plot_work_vs_parameter(df: pd.DataFrame, output_dir: Path):
     Expected: parabola with minimum at original configuration.
     Note: total_work is a composite metric: vertical_work + lambda * horizontal_work.
     """
-    # Set style
     sns.set_style("whitegrid")
     plt.rcParams['figure.figsize'] = (14, 10)
     
-    # Separate by transformation type
     df_rotation = df[df['variant_type'] == 'rotation'].copy()
     df_original = df[df['variant_type'] == 'original'].copy()
     df_scale_ns = df[df['variant_type'] == 'scale_ns'].copy()
     df_scale_ew = df[df['variant_type'] == 'scale_ew'].copy()
 
-    # Get all translation types dynamically
     translation_types = [vt for vt in df['variant_type'].unique() if vt.startswith('translation_')]
 
     # Separate translations by direction based on actual convention:
@@ -1278,11 +1250,9 @@ def plot_work_vs_parameter(df: pd.DataFrame, output_dir: Path):
     df_trans_we = []  # West-East: angles close to 0° and 180°
     
     for trans_type in translation_types:
-        # Extract angle from variant name (e.g., 'translation_075' -> 75)
         angle = int(trans_type.split('_')[1])
         df_trans = df[df['variant_type'] == trans_type].copy()
         
-        # Categorize based on angle
         # North-South: 90° ±45° (45-135°) and 270° ±45° (225-315°)
         if (45 <= angle <= 135) or (225 <= angle <= 315):
             df_trans_ns.append(df_trans)
@@ -1290,11 +1260,9 @@ def plot_work_vs_parameter(df: pd.DataFrame, output_dir: Path):
         else:
             df_trans_we.append(df_trans)
     
-    # Combine into single dataframes
     df_trans_ns = pd.concat(df_trans_ns, ignore_index=True) if df_trans_ns else pd.DataFrame()
     df_trans_we = pd.concat(df_trans_we, ignore_index=True) if df_trans_we else pd.DataFrame()
     
-    # Create subplots: 5 plots (rotation, translation N-S, translation W-E, scale N-S, scale E-W)
     fig, axes = plt.subplots(1, 5, figsize=(30, 6))
     
     # 1. Rotation plot
@@ -1303,7 +1271,6 @@ def plot_work_vs_parameter(df: pd.DataFrame, output_dir: Path):
         ax.scatter(df_rotation['parameter'], df_rotation['total_energy_on_3d_path_J'], 
                   s=100, alpha=0.7, c='steelblue', edgecolors='black', linewidth=1.5)
         
-        # Add original point
         if len(df_original) > 0:
             ax.scatter([0], df_original['total_energy_on_3d_path_J'].values, 
                       s=200, alpha=0.9, c='red', marker='*', 
@@ -1317,7 +1284,6 @@ def plot_work_vs_parameter(df: pd.DataFrame, output_dir: Path):
                                df_rotation['parameter'].max(), 100)
             y_fit = np.polyval(coeffs, x_fit)
             
-            # Calculate R²
             y_mean = df_rotation['total_energy_on_3d_path_J'].mean()
             ss_tot = np.sum((df_rotation['total_energy_on_3d_path_J'] - y_mean)**2)
             ss_res = np.sum((df_rotation['total_energy_on_3d_path_J'] - np.polyval(coeffs, df_rotation['parameter']))**2)
@@ -1327,7 +1293,6 @@ def plot_work_vs_parameter(df: pd.DataFrame, output_dir: Path):
                 ax.plot(x_fit, y_fit, 'r--', linewidth=2, alpha=0.6, 
                        label=f'Parabolic fit (R²={r2:.3f})')
                 
-                # Find vertex
                 vertex_x = -coeffs[1] / (2 * coeffs[0])
                 ax.axvline(vertex_x, color='green', linestyle=':', linewidth=1.5, 
                           label=f'Vertex: {vertex_x:.1f}°')
@@ -1355,7 +1320,6 @@ def plot_work_vs_parameter(df: pd.DataFrame, output_dir: Path):
                           s=100, alpha=0.7, edgecolors='black', linewidth=1.5,
                           label=f'North ({angle}°)')
     
-    # Add original point
     if len(df_original) > 0:
         ax.scatter([0], df_original['total_energy_on_3d_path_J'].values, 
                   s=200, alpha=0.9, c='red', marker='*', 
@@ -1384,7 +1348,6 @@ def plot_work_vs_parameter(df: pd.DataFrame, output_dir: Path):
                           s=100, alpha=0.7, edgecolors='black', linewidth=1.5,
                           label=f'East ({angle}°)')
     
-    # Add original point
     if len(df_original) > 0:
         ax.scatter([0], df_original['total_energy_on_3d_path_J'].values, 
                   s=200, alpha=0.9, c='red', marker='*', 
@@ -1430,23 +1393,19 @@ def plot_work_vs_parameter(df: pd.DataFrame, output_dir: Path):
     
     plt.tight_layout()
     
-    # Save figure
     output_file = output_dir / "fine_grid_gravitational_work.png"
     plt.savefig(output_file, dpi=300, bbox_inches='tight')
-    print(f"\n✓ Plot saved: {output_file}")    
-    
+    print(f"\nPlot saved: {output_file}")
+
     output_file_pdf = output_dir / "fine_grid_gravitational_work.pdf"
     plt.savefig(output_file_pdf, dpi=300, bbox_inches='tight')
-    print(f"✓ Plot saved: {output_file_pdf}")
-    
+    print(f"Plot saved: {output_file_pdf}")
+
 
 def print_summary(df: pd.DataFrame):
     """Print summary statistics."""
-    print("\n" + "="*60)
-    print("MOBILITY ENERGY SUMMARY")
-    print("="*60)
-    
-    # Original
+    print("\nMOBILITY ENERGY SUMMARY")
+
     df_orig = df[df['variant_type'] == 'original']
     if len(df_orig) > 0:
         orig_work = df_orig['total_energy_on_3d_path_J'].values[0]
@@ -1458,7 +1417,6 @@ def print_summary(df: pd.DataFrame):
             print(f"Original vertical_energy_on_3d_path_J: {df_orig['vertical_energy_on_3d_path_J'].values[0]:,.0f}")
             print(f"Original horizontal_energy_3d_on_3d_path_J: {df_orig['horizontal_energy_3d_on_3d_path_J'].values[0]:,.0f}")
     
-    # By type
     for variant_type in df['variant_type'].unique():
         if variant_type == 'original':
             continue
@@ -1497,9 +1455,7 @@ def main(cities: List[str], resume: bool = False, save_segments: bool = False, l
     _sfx = "" if polygon_source == "fua" else f"_{polygon_source}"
 
     for city in cities:
-        print("\n" + "="*60)
-        print(f"FINE GRID MOBILITY ENERGY ANALYSIS: {city.upper()}  (source={polygon_source})")
-        print("="*60)
+        print(f"\nFINE GRID MOBILITY ENERGY ANALYSIS: {city.upper()}  (source={polygon_source})")
 
         base_dir = Path(data_root) / city
         graphs_dir = base_dir / f"graphs_fine_grid{_sfx}"
@@ -1512,7 +1468,6 @@ def main(cities: List[str], resume: bool = False, save_segments: bool = False, l
             else:
                 print(f"Warning: DEM file not found at {dem_file} or {alt_dem}")
 
-        # Check directories
         if not graphs_dir.exists():
             print(f"Error: Graphs directory not found: {graphs_dir}")
             continue
@@ -1520,7 +1475,6 @@ def main(cities: List[str], resume: bool = False, save_segments: bool = False, l
         print(f"\nGraphs directory: {graphs_dir}")
         print(f"Output directory: {output_dir}")
         
-        # Load DEM
         dem_src = load_dem_reader(dem_file)
         
         # List graph files and stream them one by one to keep RAM bounded.
@@ -1530,10 +1484,8 @@ def main(cities: List[str], resume: bool = False, save_segments: bool = False, l
             print(f"No graphs found for {city}")
             continue
         
-        # Output CSV path
         output_csv = output_dir / "fine_grid_gravitational_work.csv"
         
-        # Analyze graphs with resume support
         df = analyze_graphs(
             graph_files,
             dem_src,
@@ -1546,26 +1498,20 @@ def main(cities: List[str], resume: bool = False, save_segments: bool = False, l
             elevation_source=elevation_source,
         )
         
-        # Ensure de-duplication in memory as well
         if 'filename' in df.columns:
             df = df.drop_duplicates(subset=['filename'], keep='last')
-        print(f"\n✓ Results up to date: {output_csv}")
-        
-        # Print summary
+        print(f"\nResults up to date: {output_csv}")
+
         print_summary(df)
-        
-        # Create plots
+
         plot_work_vs_parameter(df, output_dir)
-        
-        # Close DEM
+
         if dem_src is not None:
             dem_src.close()
-        
-        print("✓ Completed for " + city)
-    
-    print("\n" + "="*60)
-    print("✓ ALL ANALYSES COMPLETE")
-    print("="*60)
+
+        print("Completed for " + city)
+
+    print("\nALL ANALYSES COMPLETE")
 
 
 if __name__ == '__main__':

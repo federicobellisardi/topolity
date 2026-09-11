@@ -37,6 +37,7 @@ cache/
 *.tif
 *.tiff
 *.h5
+data
 
 # Logs and secrets
 logs/

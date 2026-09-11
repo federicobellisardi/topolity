@@ -115,11 +115,9 @@ class DEMReader:
                 elevation = src.read(1, masked=True)
                 transform = src.transform
 
-        # Vectorised: select valid pixels in one numpy call (avoids per-pixel Python loop)
         valid = ~np.ma.getmaskarray(elevation)
         row_idx, col_idx = np.where(valid)
 
-        # Affine transform applied as numpy broadcast (no Python iteration)
         # For a north-up raster: x = c + a*(col+0.5),  y = f + e*(row+0.5)
         # General case includes b and d terms (skew/rotation) for correctness.
         xs = (transform.c

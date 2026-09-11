@@ -47,9 +47,7 @@ p = psutil.Process(os.getpid())
 p.cpu_percent(None)
 
 
-# ============================================================================
 # DEM Management
-# ============================================================================
 
 class DEMReader:
     """DEM reader with optional download from OpenTopography."""
@@ -111,9 +109,7 @@ class DEMReader:
             self.src.close()
 
 
-# ============================================================================
 # Core Work Computation
-# ============================================================================
 
 def compute_edge_work(G: nx.Graph, u, v, dem_reader: DEMReader, 
                      ds: float = 10.0, m: float = 1.0, g: float = 1.0
@@ -124,37 +120,30 @@ def compute_edge_work(G: nx.Graph, u, v, dem_reader: DEMReader,
     Returns:
         (total_work, segment_results)
     """
-    # Get edge data (handle MultiGraph)
     edge_data = G.get_edge_data(u, v)
-    
+
     if isinstance(edge_data, dict):
         data = edge_data
     else:
-        # Multiple edges, take first
         data = list(edge_data.values())[0] if edge_data else {}
-    
-    # Get geometry
+
     geom = data.get('geometry')
-    
+
     if geom is None:
-        # Create straight line from node coordinates
         x1 = G.nodes[u].get('x', G.nodes[u].get('lon'))
         y1 = G.nodes[u].get('y', G.nodes[u].get('lat'))
         x2 = G.nodes[v].get('x', G.nodes[v].get('lon'))
         y2 = G.nodes[v].get('y', G.nodes[v].get('lat'))
         geom = LineString([(x1, y1), (x2, y2)])
-    
-    # Sample points along edge
+
     length = geom.length
     n_pts = max(int(length / ds) + 1, 2)
     dists = np.linspace(0, length, n_pts)
     pts = [geom.interpolate(d) for d in dists]
     coords = [(pt.x, pt.y) for pt in pts]
-    
-    # Sample elevations
+
     elevs = dem_reader.sample(coords)
-    
-    # Calculate uphill work per segment
+
     work = 0.0
     segment_results = []
     for i, (h1, h2) in enumerate(zip(elevs[:-1], elevs[1:])):
@@ -217,7 +206,6 @@ class WorkEvaluator:
         self.m = m
         self.g = g
         
-        # Map nodes to sequential IDs
         self.node2id = {n: i for i, n in enumerate(G.nodes())}
         self.id2node = {i: n for n, i in self.node2id.items()}
         
@@ -318,9 +306,7 @@ class WorkEvaluator:
         return total
 
 
-# ============================================================================
 # Graph Loading
-# ============================================================================
 
 def parse_filename(filename: str) -> Tuple[str, float]:
     """Parse graph filename to extract variant and parameter."""
@@ -416,9 +402,7 @@ def load_graphs_from_glob(graphs_dir: Path) -> Dict[str, nx.Graph]:
     return graphs
 
 
-# ============================================================================
 # Data Loading
-# ============================================================================
 
 def load_cells(path: Path, cells_crs: str = "EPSG:3857", bbox: Optional[dict] = None) -> pd.DataFrame:
     """Load cells and optionally filter by bbox."""
@@ -507,9 +491,7 @@ def map_cells_to_nodes(G: nx.Graph, cell_df: pd.DataFrame) -> Dict[int, int]:
     return mapping
 
 
-# ============================================================================
 # Analysis & Plotting
-# ============================================================================
 
 def analyze_graphs(graphs: Dict[str, nx.Graph], dem_reader: DEMReader, 
                   cell_map: Dict[int, int], od_work: pd.DataFrame, od_hol: pd.DataFrame,
@@ -768,10 +750,8 @@ def plot_standard(df: pd.DataFrame, output_dir: Path):
 
 def print_summary(df: pd.DataFrame):
     """Print summary statistics."""
-    logger.info("=" * 60)
     logger.info("GRAVITATIONAL WORK SUMMARY")
-    logger.info("=" * 60)
-    
+
     df_orig = df[df['variant_type'] == 'original']
     if len(df_orig) > 0:
         orig_work = df_orig['total_work'].values[0]
@@ -793,9 +773,7 @@ def print_summary(df: pd.DataFrame):
             logger.info(f"  Change from original: {pct_change.min():.1f}% to {pct_change.max():.1f}%")
 
 
-# ============================================================================
 # Main
-# ============================================================================
 
 def main():
     parser = argparse.ArgumentParser(description='Unified gravitational work calculator')
@@ -967,12 +945,9 @@ def main():
     if args.plot:
         plot_results(df, output_dir, mode=args.plot_mode)
     
-    # Cleanup
     dem.close()
-    
-    logger.info("=" * 60)
+
     logger.info("ANALYSIS COMPLETE")
-    logger.info("=" * 60)
 
 
 if __name__ == '__main__':

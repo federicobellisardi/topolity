@@ -546,9 +546,7 @@ def plot_aggregate_results(summary_fp: Path):
     max_abs = max(np.nanmax(np.abs(finite_vals)), 1e-9)
     pad = max_abs * 0.15
 
-    # --------------------------------------------------------
     # 1) Mean total change per city
-    # --------------------------------------------------------
     fig, ax = plt.subplots(figsize=(11, max(5, 0.55 * len(df_plot))))
 
     sns.barplot(
@@ -602,9 +600,7 @@ def plot_aggregate_results(summary_fp: Path):
     fig.savefig(out1, bbox_inches="tight")
     plt.close(fig)
 
-    # --------------------------------------------------------
     # 2) Vertical vs horizontal grouped bars
-    # --------------------------------------------------------
     comp_long = df_plot.melt(
         id_vars=["city_label"],
         value_vars=["vertical", "horizontal"],
@@ -676,9 +672,7 @@ def plot_aggregate_results(summary_fp: Path):
     fig.savefig(out2, bbox_inches="tight")
     plt.close(fig)
 
-    # --------------------------------------------------------
     # 3) Scatter: vertical contribution vs total change
-    # --------------------------------------------------------
     fig, ax = plt.subplots(figsize=(9, 7))
 
     size_col = "n_better_filtered" if "n_better_filtered" in df_plot.columns else None

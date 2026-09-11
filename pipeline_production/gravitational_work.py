@@ -34,7 +34,6 @@ from tqdm import tqdm
 import multiprocessing
 
 
-# Setup logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
@@ -46,10 +45,6 @@ logger = logging.getLogger(__name__)
 p = psutil.Process(os.getpid())
 p.cpu_percent(None)
 
-
-# ============================================================================
-# DEM Management
-# ============================================================================
 
 class DEMReader:
     """DEM reader with optional download from OpenTopography."""
@@ -111,10 +106,6 @@ class DEMReader:
             self.src.close()
 
 
-# ============================================================================
-# Core Work Computation
-# ============================================================================
-
 def compute_edge_work(G: nx.Graph, u, v, dem_reader: DEMReader, 
                      ds: float = 10.0, m: float = 1.0, g: float = 1.0
                      ) -> Tuple[float, List[Dict]]:
@@ -124,37 +115,30 @@ def compute_edge_work(G: nx.Graph, u, v, dem_reader: DEMReader,
     Returns:
         (total_work, segment_results)
     """
-    # Get edge data (handle MultiGraph)
     edge_data = G.get_edge_data(u, v)
     
     if isinstance(edge_data, dict):
         data = edge_data
     else:
-        # Multiple edges, take first
         data = list(edge_data.values())[0] if edge_data else {}
     
-    # Get geometry
     geom = data.get('geometry')
     
     if geom is None:
-        # Create straight line from node coordinates
         x1 = G.nodes[u].get('x', G.nodes[u].get('lon'))
         y1 = G.nodes[u].get('y', G.nodes[u].get('lat'))
         x2 = G.nodes[v].get('x', G.nodes[v].get('lon'))
         y2 = G.nodes[v].get('y', G.nodes[v].get('lat'))
         geom = LineString([(x1, y1), (x2, y2)])
     
-    # Sample points along edge
     length = geom.length
     n_pts = max(int(length / ds) + 1, 2)
     dists = np.linspace(0, length, n_pts)
     pts = [geom.interpolate(d) for d in dists]
     coords = [(pt.x, pt.y) for pt in pts]
     
-    # Sample elevations
     elevs = dem_reader.sample(coords)
     
-    # Calculate uphill work per segment
     work = 0.0
     segment_results = []
     for i, (h1, h2) in enumerate(zip(elevs[:-1], elevs[1:])):
@@ -217,11 +201,9 @@ class WorkEvaluator:
         self.m = m
         self.g = g
         
-        # Map nodes to sequential IDs
         self.node2id = {n: i for i, n in enumerate(G.nodes())}
         self.id2node = {i: n for n, i in self.node2id.items()}
         
-        # Precompute per-edge uphill work
         logger.info("Precomputing edge work for all edges")
         self.arc_work = {}
         self.arc_work_segments = {}
@@ -231,12 +213,10 @@ class WorkEvaluator:
             self.arc_work[(self.node2id[u], self.node2id[v])] = w
             self.arc_work_segments[(self.node2id[u], self.node2id[v])] = segments
         
-        # Build NetworKit graph weighted by geometric length
         logger.info("Converting to NetworKit graph")
         n = len(self.node2id)
         nkG = nk.Graph(n, weighted=True, directed=G.is_directed())
         
-        # Collect minimal lengths for (u, v) pairs
         min_len = {}
         for u, v, data in G.edges(data=True):
             length = data.get('length')
@@ -267,7 +247,6 @@ class WorkEvaluator:
         """Sum OD-weighted arc work along shortest paths."""
         logger.info(f"Computing total work for {len(od_df)} OD flows")
         
-        # Group destinations by origin
         od_by_origin = {}
         for origin, dest, flow in od_df.itertuples(index=False, name=None):
             od_by_origin.setdefault(origin, []).append((dest, flow))
@@ -276,7 +255,6 @@ class WorkEvaluator:
         total_origins = len(od_by_origin)
         
         if use_multiprocessing:
-            # Parallel computation
             args_list = [
                 (origin_cell, dest_list, cell_map, self.node2id, self.nkG, 
                  self.arc_work, idx, total_origins, start_time)
@@ -286,7 +264,6 @@ class WorkEvaluator:
                 results = pool.map(_work_for_origin, args_list)
             total = sum(results)
         else:
-            # Sequential computation
             total = 0.0
             for idx, (origin_cell, dest_list) in enumerate(tqdm(od_by_origin.items(), 
                                                                  desc="OD shortest paths", 
@@ -317,10 +294,6 @@ class WorkEvaluator:
         logger.info(f"Total uphill work = {total:.2f}")
         return total
 
-
-# ============================================================================
-# Graph Loading
-# ============================================================================
 
 def parse_filename(filename: str) -> Tuple[str, float]:
     """Parse graph filename to extract variant and parameter."""
@@ -416,10 +389,6 @@ def load_graphs_from_glob(graphs_dir: Path) -> Dict[str, nx.Graph]:
     return graphs
 
 
-# ============================================================================
-# Data Loading
-# ============================================================================
-
 def load_cells(path: Path, cells_crs: str = "EPSG:3857", bbox: Optional[dict] = None) -> pd.DataFrame:
     """Load cells and optionally filter by bbox."""
     logger.info("Loading cells")
@@ -446,7 +415,6 @@ def load_cells(path: Path, cells_crs: str = "EPSG:3857", bbox: Optional[dict] = 
     else:
         raise KeyError(f"Missing bounding box columns in {path}")
     
-    # Filter by bbox if provided
     if bbox:
         poly = Polygon([(lon, lat) for lat, lon in bbox])
         df['keep'] = df.apply(
@@ -507,10 +475,6 @@ def map_cells_to_nodes(G: nx.Graph, cell_df: pd.DataFrame) -> Dict[int, int]:
     return mapping
 
 
-# ============================================================================
-# Analysis & Plotting
-# ============================================================================
-
 def analyze_graphs(graphs: Dict[str, nx.Graph], dem_reader: DEMReader, 
                   cell_map: Dict[int, int], od_work: pd.DataFrame, od_hol: pd.DataFrame,
                   output_csv: Path, output_dir: Path,
@@ -519,7 +483,6 @@ def analyze_graphs(graphs: Dict[str, nx.Graph], dem_reader: DEMReader,
                   save_segments: bool = True) -> pd.DataFrame:
     """Analyze all graphs and compute gravitational work."""
     
-    # Check for existing results if resuming
     existing_done = set()
     wrote_header = False
     if resume and output_csv.exists():
@@ -541,7 +504,6 @@ def analyze_graphs(graphs: Dict[str, nx.Graph], dem_reader: DEMReader,
     for variant_key, G in to_process.items():
         logger.info(f"=== Processing '{variant_key}' ===")
         
-        # Parse variant info
         if variant_key.endswith('.pkl'):
             variant_type, parameter = parse_filename(variant_key)
             variant_name = variant_key.replace('graph_', '').replace('.pkl', '')
@@ -550,10 +512,8 @@ def analyze_graphs(graphs: Dict[str, nx.Graph], dem_reader: DEMReader,
             parameter = 0.0
             variant_name = variant_key
         
-        # Create evaluator
         evaluator = WorkEvaluator(G, dem_reader, ds=ds, m=m, g=g)
         
-        # Compute work
         wd = evaluator.compute_total_work(cell_map, od_work, use_multiprocessing=use_multiprocessing)
         hol = evaluator.compute_total_work(cell_map, od_hol, use_multiprocessing=use_multiprocessing)
         total_work = wd + hol
@@ -571,7 +531,6 @@ def analyze_graphs(graphs: Dict[str, nx.Graph], dem_reader: DEMReader,
         new_rows.append(row)
         logger.info(f"  WD={wd:,.0f}, HOL={hol:,.0f}, TOTAL={total_work:,.0f}")
         
-        # Save segment-level work
         if save_segments:
             segment_rows = []
             for (u, v), segments in evaluator.arc_work_segments.items():
@@ -590,14 +549,12 @@ def analyze_graphs(graphs: Dict[str, nx.Graph], dem_reader: DEMReader,
             seg_work_df.to_csv(seg_work_csv, index=False)
             logger.info(f"  Segment work saved → {seg_work_csv.name}")
         
-        # Append to CSV incrementally
         try:
             pd.DataFrame([row]).to_csv(output_csv, mode='a', header=not wrote_header, index=False)
             wrote_header = True
         except Exception as e:
             logger.warning(f"Failed to append to {output_csv}: {e}")
     
-    # Load and return full results
     try:
         df = pd.read_csv(output_csv)
         if 'variant' in df.columns:
@@ -613,7 +570,6 @@ def analyze_graphs(graphs: Dict[str, nx.Graph], dem_reader: DEMReader,
 def plot_results(df: pd.DataFrame, output_dir: Path, mode: str = 'auto'):
     """Create plots based on data type."""
     
-    # Auto-detect mode
     if mode == 'auto':
         if 'rotation' in df['variant_type'].values or any('translation_' in str(v) for v in df['variant_type'].values):
             mode = 'fine_grid'
@@ -739,16 +695,13 @@ def plot_standard(df: pd.DataFrame, output_dir: Path):
     """Create standard variant comparison plots."""
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
     
-    # Sort by total work
     df_sorted = df.sort_values('total_work')
     
-    # Bar plot
     ax1.barh(df_sorted['variant'], df_sorted['total_work'])
     ax1.set_xlabel('Total Gravitational Work')
     ax1.set_ylabel('Variant')
     ax1.set_title('Gravitational Work by Variant')
     
-    # Scatter plot (if parameter exists)
     if 'parameter' in df.columns and df['parameter'].notna().any():
         ax2.scatter(df['parameter'], df['total_work'], s=100, alpha=0.7)
         ax2.set_xlabel('Parameter')
@@ -768,9 +721,7 @@ def plot_standard(df: pd.DataFrame, output_dir: Path):
 
 def print_summary(df: pd.DataFrame):
     """Print summary statistics."""
-    logger.info("=" * 60)
     logger.info("GRAVITATIONAL WORK SUMMARY")
-    logger.info("=" * 60)
     
     df_orig = df[df['variant_type'] == 'original']
     if len(df_orig) > 0:
@@ -792,10 +743,6 @@ def print_summary(df: pd.DataFrame):
             pct_change = ((df_var['total_work'] - orig_work) / orig_work * 100)
             logger.info(f"  Change from original: {pct_change.min():.1f}% to {pct_change.max():.1f}%")
 
-
-# ============================================================================
-# Main
-# ============================================================================
 
 def main():
     parser = argparse.ArgumentParser(description='Unified gravitational work calculator')
@@ -826,7 +773,6 @@ def main():
     
     args = parser.parse_args()
     
-    # Load configuration
     conf = {}
     if args.conf:
         with open(args.conf) as f:
@@ -838,7 +784,6 @@ def main():
         logger.error("City not specified")
         sys.exit(1)
     
-    # Get bbox
     bbox_file = Path(os.environ.get('WORKSPACE', '/home/fbellisardi/code')) / 'data' / 'metropolis.json'
     if bbox_file.exists():
         with open(bbox_file) as f:
@@ -847,14 +792,12 @@ def main():
     else:
         bbox = None
     
-    # Determine directories
     if args.base_dir:
         base_dir = Path(args.base_dir)
     else:
         workspace = Path(os.environ.get('WORKSPACE', '/home/fbellisardi/code'))
         base_dir = workspace / 'topolity' / 'data' / 'data_processed' / city
     
-    # Determine which graph directories to load
     if args.all_graphs:
         graphs_dir_names = []
         for candidate in ['graphs', 'graphs_fine_grid']:
@@ -879,7 +822,6 @@ def main():
     if not dem_file.exists():
         dem_file = base_dir / "land" / f"{city}_dem.tif"
     
-    # Parameters
     cells_crs = conf.get('cells_crs', 'EPSG:3857')
     api_key = conf.get('api_key')
     ds = args.ds or conf.get('ds', 10.0)
@@ -892,7 +834,6 @@ def main():
     logger.info(f"Parameters: ds={ds}, m={m}, g={g}")
     logger.info(f"Multiprocessing: {use_multiprocessing}")
     
-    # Load graphs from all directories
     all_graphs = {}
     for graphs_dir in graphs_dirs:
         if not graphs_dir.exists():
@@ -908,7 +849,6 @@ def main():
         # Add directory prefix to avoid name conflicts
         dir_name = graphs_dir.name
         for variant_key, G in graphs.items():
-            # Add directory prefix if loading from multiple directories
             if len(graphs_dirs) > 1:
                 prefixed_key = f"{dir_name}/{variant_key}"
             else:
@@ -922,7 +862,6 @@ def main():
     logger.info(f"Total graphs loaded: {len(all_graphs)}")
     graphs = all_graphs
     
-    # Load DEM
     dem = DEMReader(dem_file)
     if bbox and api_key:
         dem.ensure_dem(api_key, {
@@ -931,12 +870,10 @@ def main():
         })
     dem.open()
     
-    # Load cells and OD
     cells = load_cells(cells_file, cells_crs, bbox)
     od_work = load_od(od_w_file)
     od_hol = load_od(od_h_file)
     
-    # Filter OD by valid cells
     valid = set(cells.cell)
     od_work = od_work[od_work.origin.isin(valid) & od_work.dest.isin(valid)]
     od_hol = od_hol[od_hol.origin.isin(valid) & od_hol.dest.isin(valid)]
@@ -960,19 +897,14 @@ def main():
     
     logger.info(f"Results saved: {output_csv}")
     
-    # Summary
     print_summary(df)
     
-    # Plot
     if args.plot:
         plot_results(df, output_dir, mode=args.plot_mode)
     
-    # Cleanup
     dem.close()
     
-    logger.info("=" * 60)
     logger.info("ANALYSIS COMPLETE")
-    logger.info("=" * 60)
 
 
 if __name__ == '__main__':

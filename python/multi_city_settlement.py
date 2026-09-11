@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import argparse
 import pickle
 import warnings
 from pathlib import Path
@@ -73,7 +74,9 @@ CITY_NAME_ALIASES = {
 NEW_RESIDENTS = 25_000
 TRIPS_PER_PERSON_PER_DAY = 2.0
 
-D_0 = 25_000.0
+# D_0 (distance decay, meters) is not fixed a priori: it is estimated per city
+# in run_city() from the population-weighted mean pairwise distance between
+# grid cells, once each city's populations and distance matrix are available.
 ALPHA = 1.0
 
 DS = 10.0
@@ -106,7 +109,7 @@ ZONE_COLORS = [
     "#e7298a",
 ]
 
-MAP_BASEMAP_PROVIDER = ctx.providers.CartoDB.PositronNoLabels
+MAP_BASEMAP_PROVIDER = ctx.providers.Esri.WorldGrayCanvas
 MAP_DEM_DOWNSAMPLE = 4
 MAP_CONTOUR_LEVELS = 20
 MAP_CONTOUR_LABEL_EVERY = 5
@@ -115,7 +118,7 @@ MAP_CONTOUR_LINEWIDTH = 0.25
 
 FONT_TITLE = 26
 FONT_LABEL = 24
-FONT_TICK = 20
+FONT_TICK = 24
 FONT_LEGEND = 18
 FONT_BAR_TEXT = 18
 FONT_MAP_NUMBER = 22
@@ -516,6 +519,7 @@ def compute_densification_cost_for_cell(
     distance_matrix,
     G,
     edge_vertical_gain_m,
+    d_0,
 ):
     populations = cells_gdf["population"].values.copy()
 
@@ -524,7 +528,7 @@ def compute_densification_cost_for_cell(
 
     distances_from_test = distance_matrix[test_cell_idx, :]
 
-    attractions = populations**ALPHA * np.exp(-distances_from_test / D_0)
+    attractions = populations**ALPHA * np.exp(-distances_from_test / d_0)
     attractions[test_cell_idx] = 0.0
 
     total_attraction = attractions.sum()
@@ -914,19 +918,9 @@ def make_city_plots(city, cells_gdf, selected_df, output_dir, dem_file: Path):
                 zorder=30,
             )
 
-        try:
-            ctx.add_basemap(
-                ax,
-                crs=cells_ll.crs,
-                source=MAP_BASEMAP_PROVIDER,
-                alpha=1,
-                attribution=False,
-                zorder=1,
-            )
-        except Exception as e:
-            print(f"[{city}] Could not add basemap: {e}")
-        # Focus the map on the analyzed area (selected cells). Use selected extent
-        # with a padding fraction so the map does not include large empty regions.
+        # Focus the map on the analyzed area (selected cells) BEFORE fetching the
+        # basemap, so contextily picks tiles for the final zoomed-in extent rather
+        # than the full city (which would then be upsampled/blurred when cropped).
         try:
             if not selected_ll.empty:
                 minx, miny, maxx, maxy = selected_ll.total_bounds
@@ -944,6 +938,18 @@ def make_city_plots(city, cells_gdf, selected_df, output_dir, dem_file: Path):
                 ax.set_ylim(miny - pad_y, maxy + pad_y)
         except Exception as e:
             print(f"[{city}] Could not set focused extent: {e}")
+
+        try:
+            ctx.add_basemap(
+                ax,
+                crs=cells_ll.crs,
+                source=MAP_BASEMAP_PROVIDER,
+                alpha=1,
+                attribution=False,
+                zorder=1,
+            )
+        except Exception as e:
+            print(f"[{city}] Could not add basemap: {e}")
 
         # try:
         #     add_dem_contours_to_ax(
@@ -982,9 +988,7 @@ def make_city_plots(city, cells_gdf, selected_df, output_dir, dem_file: Path):
         x = np.arange(len(plot_df))
         colors = plot_df["zone_color"].tolist()
 
-        # --------------------------------------------------------
         # Main chart: vertical energy only
-        # --------------------------------------------------------
         fig, ax = plt.subplots(figsize=(12, 7))
 
         vertical_gj = plot_df["vertical_work_joules"] / 1e9
@@ -1024,9 +1028,7 @@ def make_city_plots(city, cells_gdf, selected_df, output_dir, dem_file: Path):
         fig.savefig(output_dir / f"{city}_densification_vertical_energy.pdf", dpi=300, bbox_inches="tight")
         plt.close(fig)
 
-        # --------------------------------------------------------
         # Total chart: same colors as map
-        # --------------------------------------------------------
         fig, ax = plt.subplots(figsize=(12, 7))
 
         total_gj = plot_df["total_work_joules"] / 1e9
@@ -1066,9 +1068,7 @@ def make_city_plots(city, cells_gdf, selected_df, output_dir, dem_file: Path):
         fig.savefig(output_dir / f"{city}_densification_total_energy.pdf", dpi=300, bbox_inches="tight")
         plt.close(fig)
 
-        # --------------------------------------------------------
         # Component chart: same zone color, solid vertical + transparent horizontal
-        # --------------------------------------------------------
         fig, ax = plt.subplots(figsize=(12, 7))
 
         vertical_gj = plot_df["vertical_work_joules"] / 1e9
@@ -1098,13 +1098,17 @@ def make_city_plots(city, cells_gdf, selected_df, output_dir, dem_file: Path):
         ax.set_xticks(x)
         ax.set_xticklabels(plot_df["zone_label"], rotation=20, fontsize=FONT_TICK)
         ax.set_ylabel("Additional mobility energy (GJ)", fontsize=FONT_LABEL)
-        ax.set_title(f"{city.title()}", fontsize=FONT_TITLE)
+        ax.tick_params(axis="y", labelsize=FONT_TICK)
+        # ax.set_title(f"{city.title()}", fontsize=FONT_TITLE)
         ax.legend(
             handles=[
-                Patch(facecolor="gray", edgecolor="black", alpha=0.95, label="Altitudinal component"),
-                Patch(facecolor="gray", edgecolor="black", alpha=0.35, label="Longitudinal component"),
+                Patch(facecolor="gray", edgecolor="black", alpha=0.95, label="Altitudinal"),
+                Patch(facecolor="gray", edgecolor="black", alpha=0.35, label="Longitudinal"),
             ],
-            loc="upper left",
+            loc="lower left",
+            bbox_to_anchor=(0.0, 1.01),
+            ncol=2,
+            borderaxespad=0,
             fontsize=FONT_LEGEND,
         )
         ax.grid(True, axis="y", alpha=0.3, linestyle="--")
@@ -1119,9 +1123,7 @@ def make_city_plots(city, cells_gdf, selected_df, output_dir, dem_file: Path):
 
 
 def run_city(city: str):
-    print("\n" + "=" * 100)
-    print(f"RUNNING CITY: {city.upper()}")
-    print("=" * 100)
+    print(f"\nRUNNING CITY: {city.upper()}")
 
     paths = city_paths(city)
     output_dir = paths["output"]
@@ -1154,6 +1156,12 @@ def run_city(city: str):
 
     distance_matrix = cdist(cell_centroids, cell_centroids, metric="euclidean")
 
+    pair_weights = np.outer(cells["population"].values, cells["population"].values)
+    np.fill_diagonal(pair_weights, 0.0)
+    d_0 = np.average(distance_matrix, weights=pair_weights)
+
+    print(f"[{city}] Gravity model d_0 (population-weighted mean pairwise distance): {d_0:,.0f} m")
+
     results = []
 
     for _, candidate in tqdm(
@@ -1167,6 +1175,7 @@ def run_city(city: str):
             distance_matrix,
             G,
             edge_vertical_gain_m,
+            d_0,
         )
 
         if res is not None:
@@ -1218,21 +1227,33 @@ def run_city(city: str):
 
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Multi-city terrain-aware densification analysis")
+    parser.add_argument(
+        "--city",
+        choices=CITIES,
+        help="Run a single city instead of the full CITIES list",
+    )
+    return parser.parse_args()
+
+
 def main():
-    print("=" * 100)
+    args = parse_args()
+    cities_to_run = [args.city] if args.city else CITIES
+
     print("MULTI-CITY TERRAIN-AWARE DENSIFICATION ANALYSIS USING FUA")
-    print("=" * 100)
     print(f"New residents per test cell: {NEW_RESIDENTS:,}")
     print(f"M_PHYS_KG: {M_PHYS_KG}")
     print(f"G_PHYS: {G_PHYS}")
     print(f"Horizontal lambda: {HORIZONTAL_COST_WEIGHT:.2f} J/m")
     print(f"FUA file: {FUA_GPKG}")
     print(f"Output root: {OUTPUT_ROOT}")
+    print(f"Cities to run: {cities_to_run}")
 
     all_results = []
     all_selected = []
 
-    for city in CITIES:
+    for city in cities_to_run:
         try:
             results_df, selected_df = run_city(city)
             all_results.append(results_df)

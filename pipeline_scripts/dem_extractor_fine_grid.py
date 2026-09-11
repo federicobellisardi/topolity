@@ -507,7 +507,6 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
     dem_file = os.path.join(dem_dir, f"{folder}_dem.tif")
     stats_file = os.path.join(fine_grid_dir, 'fine_grid_stats.csv')
 
-    # Load data
     df = pd.read_csv(csv_file, sep=';').dropna(subset=['geometry'])
     df['geometry'] = df['geometry'].apply(load_wkt)
     gdf = gpd.GeoDataFrame(df, geometry='geometry', crs='EPSG:4326')
@@ -651,10 +650,8 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
 
     stats_records = []
 
-    # Build variant list
     variants = []
-    
-    # Add original
+
     variants.append({
         'variant': 'original',
         'type': 'original',
@@ -663,7 +660,6 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
         'angle_deg': 0.0
     })
     
-    # Add translations
     for idx, ((dx, dy), angle_deg) in enumerate(offsets[1:], start=1):
         # Calculate distance
         distance_x_m = abs(dx) * 111000 * np.cos(np.radians(center_y))
@@ -681,7 +677,6 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
             'translation_distance_m': distance_m
         })
     
-    # Add rotations
     for angle in rotations:
         if angle == 0:
             continue  # Already added as original
@@ -783,7 +778,6 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
         if stats is not None:
             stats_records.append(stats)
 
-    # Write stats
     fieldnames = [
         'variant', 'type', 'offset_x', 'offset_y', 'angle_deg',
         'translation_angle', 'translation_distance_m',
@@ -832,7 +826,6 @@ def process_variant(args):
         G_var = None
 
     if G_var is None:
-        # Apply transformation
         if meta['type'] == 'original':
             G_var = _G.copy()
         elif meta['type'] == 'translate':
@@ -878,20 +871,17 @@ def process_variant(args):
                 'on_land': False
             }
         
-        # Assign altitudes
         missing = assign_altitudes_from_tree(G_var, _DEM_TREE, _DEM_ALTS)
         
         # Ensure edge lengths exist
         for u, v, d in G_var.edges(data=True):
             d.setdefault('length', d.get('length', 1))
         
-        # Save pickle
         with open(pkl_path, 'wb') as f:
             pickle.dump(G_var, f)
-        
+
         on_land = True
 
-    # Compute statistics
     stats = compute_graph_statistics(G_var)
     stats['variant'] = variant
     stats['type'] = meta['type']

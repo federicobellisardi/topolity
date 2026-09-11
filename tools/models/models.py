@@ -96,7 +96,6 @@ def grav_high(G, source, target, m=1, g=1, dh=0.1, mu=0.1, model_type="work_base
     """
     
     def get_altitude_for_point(lat, lon, dem_gdf, radius=50):
-        # Convert point to shapely Point
         pt = Point(lon, lat)
         delta = radius / 111000.0  # approximate conversion from meters to degrees
         bbox = (lon - delta, lat - delta, lon + delta, lat + delta)

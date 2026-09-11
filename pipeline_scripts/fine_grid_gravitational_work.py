@@ -82,13 +82,13 @@ def load_dem_reader(dem_file: Path):
         import rasterio
         if dem_file.exists():
             src = rasterio.open(str(dem_file))
-            print(f"✓ Loaded DEM: {dem_file}")
+            print(f"Loaded DEM: {dem_file}")
             return src
         else:
-            print(f"⚠ DEM not found: {dem_file}")
+            print(f"DEM not found: {dem_file}")
             return None
     except ImportError:
-        print("⚠ rasterio not installed, cannot sample elevations")
+        print("rasterio not installed, cannot sample elevations")
         return None
 
 
@@ -107,33 +107,26 @@ def compute_edge_work(G: nx.MultiDiGraph, u, v, dem_src, ds: float = DS) -> Tupl
         total_work: Total uphill work (m * g * Δh) for this edge
         segment_results: List of dicts with 'start_coord', 'end_coord', 'work' for each segment
     """
-    # Get edge data (handle MultiDiGraph)
     edge_data = G.get_edge_data(u, v)
-    
+
     if isinstance(edge_data, dict):
-        # Single edge
         data = edge_data
     else:
-        # Multiple edges, take first
         data = list(edge_data.values())[0]
-    
-    # Get geometry
+
     geom = data.get('geometry')
-    
+
     if geom is None:
-        # Create straight line from node coordinates
         x1, y1 = G.nodes[u]['x'], G.nodes[u]['y']
         x2, y2 = G.nodes[v]['x'], G.nodes[v]['y']
         geom = LineString([(x1, y1), (x2, y2)])
-    
-    # Sample points along edge
+
     length = geom.length
     n_pts = max(int(length / ds) + 1, 2)
     dists = np.linspace(0, length, n_pts)
     pts = [geom.interpolate(d) for d in dists]
     coords = [(pt.x, pt.y) for pt in pts]
-    
-    # Sample elevations
+
     if dem_src is None:
         # Use node elevations if available
         z_u = G.nodes[u].get('z', 0.0)
@@ -141,8 +134,7 @@ def compute_edge_work(G: nx.MultiDiGraph, u, v, dem_src, ds: float = DS) -> Tupl
         elevs = np.linspace(z_u, z_v, n_pts)
     else:
         elevs = [val[0] for val in dem_src.sample(coords)]
-    
-    # Calculate uphill work per segment
+
     work = 0.0
     segment_results = []
     for i, (h1, h2) in enumerate(zip(elevs[:-1], elevs[1:])):
@@ -169,7 +161,6 @@ class ODWorkEvaluator:
         self.m = m
         self.g = g
 
-        # Map nodes to sequential IDs
         self.node2id = {n: i for i, n in enumerate(G.nodes())}
         self.id2node = {i: n for n, i in self.node2id.items()}
 
@@ -342,7 +333,6 @@ def analyze_graphs(graphs: Dict[str, nx.MultiDiGraph], dem_src, output_csv: Path
         df = df[df['flow'] > 0].reset_index(drop=True)
         return df
 
-    print(f"\nLoading cells and OD flows for city '{city}'")
     cells_df = load_cells_minimal(cells_file)
     od_work = load_od_minimal(od_w_file)
     od_hol = load_od_minimal(od_h_file)
@@ -420,7 +410,6 @@ def analyze_graphs(graphs: Dict[str, nx.MultiDiGraph], dem_src, output_csv: Path
                     'segment_work': seg['work']
                 })
         seg_work_df = pd.DataFrame(segment_rows)
-        # Extract variant name from filename (remove graph_ prefix and .pkl suffix)
         variant_name = filename.replace('graph_', '').replace('.pkl', '')
         seg_work_csv = output_csv.parent / f'arc_work_segments_{variant_name}.csv'
         seg_work_df.to_csv(seg_work_csv, index=False)
@@ -456,11 +445,9 @@ def plot_work_vs_parameter(df: pd.DataFrame, output_dir: Path):
     Expected: parabola with minimum at original configuration.
     Note: Work is in Joule-meters (J·m) = force × distance, not Joules.
     """
-    # Set style
     sns.set_style("whitegrid")
     plt.rcParams['figure.figsize'] = (14, 10)
-    
-    # Separate by transformation type
+
     df_rotation = df[df['variant_type'] == 'rotation'].copy()
     df_original = df[df['variant_type'] == 'original'].copy()
     
@@ -592,30 +579,25 @@ def plot_work_vs_parameter(df: pd.DataFrame, output_dir: Path):
     ax.grid(True, alpha=0.3)
     
     plt.tight_layout()
-    
-    # Save figure
+
     output_file = output_dir / "fine_grid_gravitational_work.png"
     plt.savefig(output_file, dpi=300, bbox_inches='tight')
-    print(f"\n✓ Plot saved: {output_file}")
-    
+    print(f"\nPlot saved: {output_file}")
+
     output_file_pdf = output_dir / "fine_grid_gravitational_work.pdf"
     plt.savefig(output_file_pdf, dpi=300, bbox_inches='tight')
-    print(f"✓ Plot saved: {output_file_pdf}")
-    
+    print(f"Plot saved: {output_file_pdf}")
+
 
 def print_summary(df: pd.DataFrame):
     """Print summary statistics."""
-    print("\n" + "="*60)
-    print("GRAVITATIONAL WORK SUMMARY")
-    print("="*60)
-    
-    # Original
+    print("\nGRAVITATIONAL WORK SUMMARY")
+
     df_orig = df[df['variant_type'] == 'original']
     if len(df_orig) > 0:
         orig_work = df_orig['total_work'].values[0]
         print(f"\nOriginal configuration work: {orig_work:,.0f} J")
-    
-    # By type
+
     for variant_type in df['variant_type'].unique():
         if variant_type == 'original':
             continue
@@ -634,9 +616,7 @@ def print_summary(df: pd.DataFrame):
 
 def main(city: str, resume: bool = False):
     """Main execution."""
-    print("="*60)
     print("FINE GRID GRAVITATIONAL WORK ANALYSIS")
-    print("="*60)
 
     base_dir = Path(f"/home/fbellisardi/code/topolity/data/data_processed/{city}")
     graphs_dir = base_dir / "graphs_fine_grid"
@@ -649,48 +629,38 @@ def main(city: str, resume: bool = False):
         else:
             print(f"Warning: DEM file not found at {dem_file} or {alt_dem}")
 
-    # Check directories
     if not graphs_dir.exists():
         print(f"Error: Graphs directory not found: {graphs_dir}")
         sys.exit(1)
-    
+
     print(f"\nGraphs directory: {graphs_dir}")
     print(f"Output directory: {output_dir}")
-    
-    # Load DEM
+
     dem_src = load_dem_reader(dem_file)
-    
-    # Load all graphs
+
     graphs = load_all_graphs(graphs_dir)
-    
+
     if len(graphs) == 0:
         print("No graphs found!")
         sys.exit(1)
-    
-    # Output CSV path
+
     output_csv = output_dir / "fine_grid_gravitational_work.csv"
-    
-    # Analyze graphs with resume support
+
     df = analyze_graphs(graphs, dem_src, output_csv=output_csv, city=city, resume=resume)
-    
+
     # Ensure de-duplication in memory as well
     if 'filename' in df.columns:
         df = df.drop_duplicates(subset=['filename'], keep='last')
-    print(f"\n✓ Results up to date: {output_csv}")
-    
-    # Print summary
+    print(f"\nResults up to date: {output_csv}")
+
     print_summary(df)
-    
-    # Create plots
+
     plot_work_vs_parameter(df, output_dir)
-    
-    # Close DEM
+
     if dem_src is not None:
         dem_src.close()
-    
-    print("\n" + "="*60)
-    print("✓ ANALYSIS COMPLETE")
-    print("="*60)
+
+    print("\nANALYSIS COMPLETE")
 
 
 if __name__ == '__main__':

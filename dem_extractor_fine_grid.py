@@ -547,7 +547,6 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
         logger.info(f"[{folder}] No data_useful.csv found, skipping.")
         return
 
-    # Create subdirectory for fine-grid results
     fine_grid_dir = os.path.join(folder_path, 'graphs_fine_grid')
     os.makedirs(fine_grid_dir, exist_ok=True)
 
@@ -556,7 +555,6 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
     dem_file = os.path.join(dem_dir, f"{folder}_dem.tif")
     stats_file = os.path.join(fine_grid_dir, 'fine_grid_stats.csv')
 
-    # Load data
     df = pd.read_csv(csv_file, sep=';').dropna(subset=['geometry'])
     df['geometry'] = df['geometry'].apply(load_wkt)
     gdf = gpd.GeoDataFrame(df, geometry='geometry', crs='EPSG:4326')
@@ -566,9 +564,8 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
     center_y = (miny + maxy) / 2
     center_x = (minx + maxx) / 2
 
-    # Calculate extended bounds for DEM (initial estimate before knowing exact offsets)
-    # Use maximum expected offset for DEM download
-
+    # Extended bounds for DEM: an initial estimate using the maximum expected offset,
+    # before the exact admissible offsets are known
     max_distance_m = step_meters * num_points
     meters_per_deg = 111000.0
     max_offset_deg = max_distance_m / meters_per_deg
@@ -615,7 +612,6 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
     _DEM_TREE, _DEM_ALTS = dem_tree, dem_alts
     _DEM_SRC, _DEM_TRANSFORMER = dem_src_main, dem_transformer_main
 
-    # Load city bbox polygon, optionally replace with FUA
     city_bbox_poly = load_metropolis_bbox(json_bbox, folder)
     logger.info(f"[{folder}] City bbox polygon loaded")
     poly_for_graph = city_bbox_poly
@@ -647,7 +643,6 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
     land_global = gpd.read_file(shp_file).to_crs("EPSG:4326")
     land_mask = land_global.geometry.union_all()
 
-    # Check for existing clipped land shapefile
     land_shp = os.path.join(folder_path, 'land', f'{folder}_clipped_land.shp')
     if os.path.exists(land_shp):
         land_gdf = gpd.read_file(land_shp).to_crs('EPSG:4326')
@@ -661,14 +656,12 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
     
     polygon = land_gdf.geometry.union_all()
 
-    # Load or build original graph
     original_pkl = os.path.join(folder_path, 'graphs', 'graph_original.pkl')
     if os.path.exists(original_pkl):
         with open(original_pkl, 'rb') as f:
             G = pickle.load(f)
         logger.info(f"[{folder}] Loaded existing original graph")
-        
-        # Ensure altitudes are assigned
+
         if all(data.get('z', 0) == 0 for _, data in list(G.nodes(data=True))[:10]):
             if selected_dem_mode == 'tree':
                 missing = assign_altitudes_from_tree(G, dem_tree, dem_alts)
@@ -700,13 +693,11 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
             missing = assign_altitudes_from_raster(G, dem_src_main, dem_transformer_main)
         logger.info(f"[{folder}] Assigned altitudes, missing: {missing}")
 
-        # Save to original graphs folder if not exists
         os.makedirs(os.path.join(folder_path, 'graphs'), exist_ok=True)
         with open(original_pkl, 'wb') as f:
             pickle.dump(G, f)
         logger.info(f"[{folder}] Saved original graph")
 
-    # Get graph bounds for offset generation
     graph_bounds = (
         min(d['x'] for _, d in G.nodes(data=True)),
         min(d['y'] for _, d in G.nodes(data=True)),
@@ -714,7 +705,8 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
         max(d['y'] for _, d in G.nodes(data=True))
     )
 
-    # Generate fine-grid offsets using graph node checks (more precise than FUA polygon)
+    # Offsets/rotations/scales are validated against actual graph node positions,
+    # which is more precise than checking the FUA polygon alone
     offsets = generate_fine_grid_offsets(step_meters, num_points, lat_ref=center_y, 
                                         land_mask=land_mask, graph_bounds=graph_bounds, seed=seed,
                                         boundary_polygon=poly_for_graph, graph=G)
@@ -730,10 +722,7 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
 
     written_stats = 0
 
-    # Build variant list
     variants = []
-    
-    # Add original
     variants.append({
         'variant': 'original',
         'type': 'original',
@@ -742,9 +731,7 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
         'angle_deg': 0.0
     })
     
-    # Add translations
     for idx, ((dx, dy), angle_deg) in enumerate(offsets[1:], start=1):
-        # Calculate distance
         distance_x_m = abs(dx) * 111000 * np.cos(np.radians(center_y))
         distance_y_m = abs(dy) * 111000
         distance_m = int(np.sqrt(distance_x_m**2 + distance_y_m**2))
@@ -760,7 +747,6 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
             'translation_distance_m': distance_m
         })
     
-    # Add rotations
     for angle in rotations:
         if angle == 0:
             continue  # Already added as original
@@ -772,7 +758,6 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
             'offset_y': 0.0
         })
 
-    # Add anisotropic scales (dilations)
     for scale in ns_scales:
         if np.isclose(scale, 1.0):
             continue
@@ -916,7 +901,6 @@ def process_variant(args):
         G_var = None
 
     if G_var is None:
-        # Apply transformation
         if meta['type'] == 'original':
             G_var = _G.copy()
         elif meta['type'] == 'translate':
@@ -953,17 +937,14 @@ def process_variant(args):
                 'on_land': False
             }
         
-        # Assign altitudes
         if _DEM_MODE == 'tree':
             _ = assign_altitudes_from_tree(G_var, _DEM_TREE, _DEM_ALTS)
         else:
             _ = assign_altitudes_from_raster(G_var, _DEM_SRC, _DEM_TRANSFORMER)
-        
-        # Ensure edge lengths exist
+
         for u, v, d in G_var.edges(data=True):
             d.setdefault('length', d.get('length', 1))
-        
-        # Save pickle
+
         with open(pkl_path, 'wb') as f:
             pickle.dump(G_var, f)
         
@@ -1067,7 +1048,6 @@ if __name__ == '__main__':
                         help='DEM assignment mode: tree=reproducible baseline, raster=low-RAM, auto=depends on low-memory')
     args = parser.parse_args()
     
-    # Override with test configuration if --test flag is set
     if args.test:
         args.step_meters = 50
         args.num_points = 3

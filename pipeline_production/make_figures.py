@@ -323,7 +323,7 @@ def make_world_map(out_dir: Path) -> None:
 
 def process_city(city: str, output_root: Path, polygon_source: str,
                  skip_dem: bool) -> None:
-    print(f"\n── {city} ({polygon_source}) ──")
+    print(f"\n{city} ({polygon_source})")
     out = _city_out(city, output_root)
 
     # copy_fig4(city, out, polygon_source)
@@ -362,7 +362,7 @@ def main() -> None:
     args.output_root.mkdir(parents=True, exist_ok=True)
 
     # Global figures (not source-specific)
-    print("\n── Global figures ──")
+    print("\nGlobal figures")
     # make_world_map(args.output_root / "global")
 
     if args.world_map_only:
@@ -377,7 +377,7 @@ def main() -> None:
     for city in cities:
         process_city(city, args.output_root, polygon_source, args.skip_dem)
 
-    print(f"\n✓ All figures saved to {args.output_root}")
+    print(f"\nAll figures saved to {args.output_root}")
 
 
 if __name__ == "__main__":
