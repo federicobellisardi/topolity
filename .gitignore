@@ -14,9 +14,6 @@ venv/
 .idea/
 *.swp
 
-# Claude Code
-.claude/
-
 # LaTeX build artifacts
 *.aux
 *.bbl
@@ -38,6 +35,7 @@ cache/
 *.tiff
 *.h5
 data
+conf/
 
 # Logs and secrets
 logs/

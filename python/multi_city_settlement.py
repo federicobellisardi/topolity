@@ -1,10 +1,35 @@
 #!/usr/bin/env python3
-"""Multi-city terrain-aware densification analysis using FUA boundaries."""
+"""Multi-city terrain-aware densification analysis using FUA boundaries.
 
+Pipeline for one city
+---------------------
+1. FUA boundary -> local UTM CRS. Every distance below is in true metres.
+2. Grid cells + WorldPop -> populated cells inside the FUA.
+3. Road graph: every edge is densified every DS metres in the UTM plane and the
+   DEM (reprojected to UTM, bilinear) is sampled bilinearly along it, giving
+     - planar length              L_e^2D
+     - terrain-following length   L_e = sum sqrt(dx^2 + dy^2 + dh^2)   (Eq. 3)
+     - positive elevation gain    Dh_e^+ = sum max(0, h_{i+1} - h_i)
+4. d_0 is fitted on the empirical working-day OD flows with the same
+   production-constrained gravity model used for the synthetic demand (Eq. 4):
+   Poisson pseudo-maximum-likelihood with origin fixed effects, which is
+   equivalent to the multinomial likelihood of Eq. 4 and includes zero-flow
+   pairs through the normalisation over all destinations.
+5. For every candidate cell, the new residents make one round trip per day
+   (outbound + return). Destinations follow Eq. 4; trips are routed by
+   minimising the 3-D length L_e, and each round trip costs
+       W = lambda * (L_out + L_ret) + m g (Dh_out^+ + Dh_ret^+)        (Eq. 1, 5)
+   All destinations are routed (GRAVITY_DESTINATION_THRESHOLD = 0); if a
+   threshold is set, the remaining probabilities are renormalised so the totals
+   always refer to the full demand N_trips = Delta P round trips.
+6. Favourable / unfavourable cells are selected among candidates with
+   comparable horizontal cost.
+"""
 
 from __future__ import annotations
 
 import argparse
+import json
 import pickle
 import warnings
 from pathlib import Path
@@ -18,16 +43,23 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 import rasterio
-from rasterio.enums import Resampling
-
 from matplotlib.patches import Patch
+from pyproj import Transformer
+from rasterio.enums import Resampling
 from rasterio.mask import mask
+from rasterio.warp import calculate_default_transform, reproject
+from scipy.ndimage import map_coordinates
+from scipy.optimize import minimize_scalar
 from scipy.spatial import KDTree
 from scipy.spatial.distance import cdist
-from shapely.geometry import box, LineString
+from scipy.special import logsumexp
+from shapely.geometry import box
 from tqdm.auto import tqdm
 
 
+# =============================================================================
+# Configuration
+# =============================================================================
 
 CITIES = [
     "milan",
@@ -40,6 +72,17 @@ CITIES = [
     "bogota",
 ]
 
+DISPLAY_NAMES = {
+    "milan": "Milan",
+    "barcelone": "Barcelona",
+    "toronto": "Toronto",
+    "chicago": "Chicago",
+    "amsterdam": "Amsterdam",
+    "bandung": "Bandung",
+    "bruxelles": "Brussels",
+    "bogota": "Bogotá",
+}
+
 DATA_ROOT = Path("/home/fbellisardi/code/topolity/data/data_processed")
 ALT_DATA_ROOT = Path("/home/fbellisardi/code/data/data_processed")
 
@@ -51,8 +94,8 @@ FUA_GPKG = Path(
     "GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg"
 )
 
+# NOTE: "<iso>_ppp_2020.tif" is the WorldPop *unconstrained* product.
 WORLDPOP_ROOT = Path("/home/fbellisardi/code/topolity/data/worldpop/raw/2020")
-
 WORLDPOP_BY_CITY = {
     "milan": "ita_ppp_2020.tif",
     "barcelone": "esp_ppp_2020.tif",
@@ -71,23 +114,28 @@ CITY_NAME_ALIASES = {
     "milan": "milano",
 }
 
+# Demand
 NEW_RESIDENTS = 25_000
-TRIPS_PER_PERSON_PER_DAY = 2.0
+ROUND_TRIPS_PER_PERSON_PER_DAY = 1.0   # one round trip: e.g. home->work + work->home
+ALPHA = 1.0                            # destination-population exponent (fixed)
+GRAVITY_DESTINATION_THRESHOLD = 0.0    # 0 = route every destination
 
-# D_0 (distance decay, meters) is not fixed a priori: it is estimated per city
-# in run_city() from the population-weighted mean pairwise distance between
-# grid cells, once each city's populations and distance matrix are available.
-ALPHA = 1.0
+# Geometry / terrain
+DS = 10.0                 # sampling step along edges [m]
+DEM_MIN_VALID = -500.0    # anything below is treated as a DEM void
+SRTM_VOID = -32768
 
-DS = 10.0
+# Routing and horizontal cost both use the terrain-following length (Eq. 3)
+ROUTING_WEIGHT = "length_3d"
+HORIZONTAL_LENGTH_ATTR = "length_3d"
 
+# Energetics
 M_PHYS_KG = 1200.0
 G_PHYS = 9.81
 
+# Candidate cells and selection
 MIN_POPULATION_CELL = 10
 MAX_CANDIDATE_CELLS = 120
-GRAVITY_DESTINATION_THRESHOLD = 0.001
-
 N_FAVORABLE = 3
 N_UNFAVORABLE = 2
 
@@ -96,38 +144,40 @@ HORIZONTAL_REFERENCE = "median"
 HORIZONTAL_TOLERANCES = [0.05, 0.10, 0.20, 0.30, 0.50, 0.75]
 MIN_COMPARABLE_CELLS = max(20, N_FAVORABLE + N_UNFAVORABLE)
 
-# Minimum distance between selected cells.
-# If too restrictive, the code relaxes it automatically.
-MIN_SELECTED_DISTANCE_M = 5_000
+MIN_SELECTED_DISTANCE_M = 5_000   # true metres (UTM)
 MIN_SELECTED_DISTANCE_RELAXATION = [1.0, 0.75, 0.50, 0.25, 0.0]
 
-ZONE_COLORS = [
-    "#1b9e77",
-    "#7570b3",
-    "#66a61e",
-    "#d95f02",
-    "#e7298a",
-]
+# Plotting
+ZONE_COLORS = ["#1b9e77", "#7570b3", "#66a61e", "#d95f02", "#e7298a"]
+# CARTO Positron (no labels), as credited in the paper's Data Availability
+# statement. CARTO raster basemaps require an API key passed as ?key=...;
+# without it every tile is watermarked "API KEY REQUIRED".
+CONF_FILE = Path("/home/fbellisardi/code/topolity/conf/conf.json")
+CARTO_STYLE = "light_nolabels"
 
-MAP_BASEMAP_PROVIDER = ctx.providers.Esri.WorldGrayCanvas
-MAP_DEM_DOWNSAMPLE = 4
-MAP_CONTOUR_LEVELS = 20
-MAP_CONTOUR_LABEL_EVERY = 5
-MAP_CONTOUR_ALPHA = 0.22
-MAP_CONTOUR_LINEWIDTH = 0.25
 
+def carto_basemap_url(style: str = CARTO_STYLE) -> str:
+    url = f"https://basemaps.cartocdn.com/rastertiles/{style}/{{z}}/{{x}}/{{y}}.png"
+    try:
+        with open(CONF_FILE) as f:
+            key = json.load(f)["api_keys"]["carto"]
+    except (FileNotFoundError, KeyError, json.JSONDecodeError) as e:
+        print(f"[basemap] CARTO API key not found in {CONF_FILE} ({e!r}); "
+              "tiles will be watermarked.")
+        return url
+    return f"{url}?key={key}"
+
+
+MAP_BASEMAP_PROVIDER = carto_basemap_url()
 FONT_TITLE = 26
 FONT_LABEL = 24
 FONT_TICK = 24
 FONT_LEGEND = 18
 FONT_BAR_TEXT = 18
 FONT_MAP_NUMBER = 22
-FONT_CONTOUR_LABEL = 12
-
-
 MAKE_MAPS = True
 MAKE_CHARTS = True
-
+MAKE_COMBINED_FIGURE = True   # Fig. 7: map (a) above components (b)
 
 
 def compute_lambda_from_fuel_params(
@@ -135,37 +185,32 @@ def compute_lambda_from_fuel_params(
     energy_mj_per_l=36.0,
     efficiency=0.25,
 ):
-    c_min, c_max = consumption_l_per_100km
-    c_mean = 0.5 * (c_min + c_max)
-
-    lambda_mean_mj_per_100km = efficiency * energy_mj_per_l * c_mean
-    lambda_mean_j_per_m = lambda_mean_mj_per_100km * 10.0
-
-    return lambda_mean_j_per_m
+    """lambda = eta * E_l * c, in J/m (mid-range consumption)."""
+    c_mean = 0.5 * (consumption_l_per_100km[0] + consumption_l_per_100km[1])
+    lambda_mj_per_100km = efficiency * energy_mj_per_l * c_mean
+    return lambda_mj_per_100km * 10.0  # MJ/100km -> J/m
 
 
-HORIZONTAL_COST_WEIGHT = compute_lambda_from_fuel_params()
+LAMBDA_J_PER_M = compute_lambda_from_fuel_params()  # = 585 J/m
 
 
+# =============================================================================
+# Paths and FUA
+# =============================================================================
 
 def city_base_dir(city: str) -> Path:
-    p1 = DATA_ROOT / city
-    p2 = ALT_DATA_ROOT / city
-
-    if p1.exists():
-        return p1
-    if p2.exists():
-        return p2
-
-    return p1
+    for root in (DATA_ROOT, ALT_DATA_ROOT):
+        if (root / city).exists():
+            return root / city
+    return DATA_ROOT / city
 
 
 def city_paths(city: str) -> dict:
     base = city_base_dir(city)
-
     return {
         "base": base,
         "cells": base / f"{city}_basic_model" / "1000_cells" / "cell_coordinates.csv",
+        "od_working": base / f"{city}_basic_model" / "1000_cells" / "od_matrix_working_day.csv",
         "graph": base / "graphs_fine_grid" / "graph_original.pkl",
         "dem": base / "dem" / f"{city}_dem.tif",
         "worldpop": WORLDPOP_ROOT / WORLDPOP_BY_CITY[city],
@@ -174,22 +219,11 @@ def city_paths(city: str) -> dict:
 
 
 def normalize_city_name(x: str) -> str:
-    return (
-        str(x)
-        .lower()
-        .replace("_", " ")
-        .replace("-", " ")
-        .replace("á", "a")
-        .replace("à", "a")
-        .replace("é", "e")
-        .replace("è", "e")
-        .replace("í", "i")
-        .replace("ó", "o")
-        .replace("ò", "o")
-        .replace("ú", "u")
-        .strip()
-    )
-
+    out = str(x).lower().replace("_", " ").replace("-", " ")
+    for a, b in [("á", "a"), ("à", "a"), ("é", "e"), ("è", "e"),
+                 ("í", "i"), ("ó", "o"), ("ò", "o"), ("ú", "u")]:
+        out = out.replace(a, b)
+    return out.strip()
 
 
 def load_city_fua(city: str) -> gpd.GeoDataFrame:
@@ -197,1111 +231,799 @@ def load_city_fua(city: str) -> gpd.GeoDataFrame:
         raise FileNotFoundError(f"FUA file not found: {FUA_GPKG}")
 
     fua = gpd.read_file(FUA_GPKG)
+    city_norm = normalize_city_name(CITY_NAME_ALIASES.get(city, city))
 
-    city_query = CITY_NAME_ALIASES.get(city, city)
-    city_norm = normalize_city_name(city_query)
-
-    name_cols = [
-        c for c in fua.columns
-        if any(k in c.lower() for k in ["name", "city", "fua", "uc"])
-    ]
-
+    name_cols = [c for c in fua.columns
+                 if any(k in c.lower() for k in ["name", "city", "fua", "uc"])]
     if not name_cols:
-        raise ValueError(f"No name-like columns found in FUA file: {list(fua.columns)}")
+        raise ValueError(f"No name-like columns in FUA file: {list(fua.columns)}")
 
-    mask = np.zeros(len(fua), dtype=bool)
-
+    sel = np.zeros(len(fua), dtype=bool)
     for col in name_cols:
-        vals = fua[col].astype(str).map(normalize_city_name)
-        mask |= vals.str.contains(city_norm, na=False)
+        sel |= fua[col].astype(str).map(normalize_city_name).str.contains(city_norm, na=False)
 
-    matches = fua[mask].copy()
-
+    matches = fua[sel].copy()
     if matches.empty:
-        raise ValueError(
-            f"No FUA match found for city='{city}' normalized='{city_norm}'. "
-            f"Searched columns: {name_cols}"
-        )
+        raise ValueError(f"No FUA match for '{city}' (normalized '{city_norm}')")
 
-    metric = matches.to_crs(3857)
-    matches["area_tmp"] = metric.geometry.area.values
-
-    selected = matches.sort_values("area_tmp", ascending=False).head(1)
-    selected = selected.drop(columns=["area_tmp"])
+    # largest match, area measured in an equal-area-ish metric CRS
+    matches["area_tmp"] = matches.to_crs(matches.estimate_utm_crs()).geometry.area.values
+    selected = matches.sort_values("area_tmp", ascending=False).head(1).drop(columns=["area_tmp"])
     selected = selected.to_crs("EPSG:4326")
 
-    print(f"  FUA match for {city}:")
-    print(selected[name_cols].iloc[0].to_dict())
-
+    print(f"  FUA match: {selected[name_cols].iloc[0].to_dict()}")
     return selected
 
 
+# =============================================================================
+# Cells and population
+# =============================================================================
 
-def load_cells(cells_file: Path) -> gpd.GeoDataFrame:
+def load_cells(cells_file: Path, metric_crs) -> gpd.GeoDataFrame:
+    """Grid cells are stored in EPSG:3857; they are reprojected to the metric CRS
+    so that centroids and distances are in true metres."""
     df = pd.read_csv(cells_file)
-
-    df["centroid_x"] = (df["x_min"] + df["x_max"]) / 2
-    df["centroid_y"] = (df["y_min"] + df["y_max"]) / 2
-
     gdf = gpd.GeoDataFrame(
         df,
-        geometry=[
-            box(row.x_min, row.y_min, row.x_max, row.y_max)
-            for _, row in df.iterrows()
-        ],
+        geometry=[box(r.x_min, r.y_min, r.x_max, r.y_max) for r in df.itertuples()],
         crs="EPSG:3857",
-    )
+    ).to_crs(metric_crs)
 
-    gdf["centroid"] = gdf.geometry.centroid
+    cent = gdf.geometry.centroid
+    gdf["centroid_x"] = cent.x.values
+    gdf["centroid_y"] = cent.y.values
+
+    side = np.sqrt(gdf.geometry.area)
+    print(f"  Cell ground side length: mean {side.mean():.0f} m "
+          f"(min {side.min():.0f}, max {side.max():.0f})")
     return gdf
 
+
+def extract_population_to_cells(cells_gdf, worldpop_file: Path, fua_gdf) -> gpd.GeoDataFrame:
+    if not worldpop_file.exists():
+        raise FileNotFoundError(f"WorldPop file not found: {worldpop_file}")
+
+    with rasterio.open(worldpop_file) as src:
+        cells_pop = cells_gdf.to_crs(src.crs)
+        fua_pop = fua_gdf.to_crs(src.crs)
+        try:
+            fua_geom = fua_pop.geometry.union_all()
+        except AttributeError:
+            fua_geom = fua_pop.geometry.unary_union
+
+        inside = cells_pop[cells_pop.geometry.intersects(fua_geom)]
+        print(f"  Cells inside FUA: {len(inside):,} / {len(cells_gdf):,}")
+
+        populations = {}
+        for idx, row in tqdm(inside.iterrows(), total=len(inside), desc="Population per cell"):
+            try:
+                out_image, _ = mask(src, [row.geometry], crop=True, nodata=0)
+                populations[idx] = max(0.0, float(out_image.sum()))
+            except Exception:
+                populations[idx] = 0.0
+
+    cells = cells_gdf.copy()
+    cells["population"] = pd.Series(populations).reindex(cells.index).fillna(0.0).values
+    cells = cells[cells["population"] > MIN_POPULATION_CELL].reset_index(drop=True)
+
+    if cells.empty:
+        raise ValueError("No populated cells inside FUA after filtering.")
+
+    print(f"  Populated cells: {len(cells):,}; population: {cells['population'].sum():,.0f}")
+    return cells
+
+
+# =============================================================================
+# DEM in metric CRS
+# =============================================================================
+
+class MetricDEM:
+    """DEM reprojected (bilinear) to the metric CRS and sampled bilinearly."""
+
+    def __init__(self, dem_file: Path, metric_crs):
+        with rasterio.open(dem_file) as src:
+            src_nodata = src.nodata if src.nodata is not None else SRTM_VOID
+            transform, width, height = calculate_default_transform(
+                src.crs, metric_crs, src.width, src.height, *src.bounds
+            )
+            arr = np.full((height, width), np.nan, dtype="float32")
+            reproject(
+                source=rasterio.band(src, 1),
+                destination=arr,
+                src_transform=src.transform,
+                src_crs=src.crs,
+                src_nodata=src_nodata,
+                dst_transform=transform,
+                dst_crs=metric_crs,
+                dst_nodata=np.nan,
+                resampling=Resampling.bilinear,
+            )
+        arr[~np.isfinite(arr) | (arr < DEM_MIN_VALID)] = np.nan
+        self.arr = arr
+        self.inv = ~transform
+        print(f"  DEM reprojected: {width}x{height} px, "
+              f"{abs(transform.a):.1f} m x {abs(transform.e):.1f} m")
+
+    def sample(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+        inv = self.inv
+        # affine gives pixel-corner coordinates; map_coordinates uses pixel centres
+        col = inv.a * x + inv.b * y + inv.c - 0.5
+        row = inv.d * x + inv.e * y + inv.f - 0.5
+        return map_coordinates(self.arr, [row, col], order=1, mode="constant",
+                               cval=np.nan, prefilter=False)
+
+
+# =============================================================================
+# Road graph: 3-D length and uphill gain per edge
+# =============================================================================
 
 def load_graph(graph_file: Path):
     with open(graph_file, "rb") as f:
         return pickle.load(f)
 
 
-def graph_nodes_gdf(G):
-    rows = []
-
-    for node_id in G.nodes():
-        nd = G.nodes[node_id]
-        rows.append(
-            {
-                "node_id": node_id,
-                "x": nd.get("x", np.nan),
-                "y": nd.get("y", np.nan),
-            }
-        )
-
-    nodes_df = pd.DataFrame(rows)
-
-    nodes_gdf = gpd.GeoDataFrame(
-        nodes_df,
-        geometry=gpd.points_from_xy(nodes_df["x"], nodes_df["y"]),
-        crs="EPSG:4326",
-    )
-
-    nodes_wm = nodes_gdf.to_crs("EPSG:3857")
-    return nodes_df, nodes_gdf, nodes_wm
+def iter_edges(G):
+    if G.is_multigraph():
+        return list(G.edges(keys=True, data=True))
+    return [(u, v, None, d) for u, v, d in G.edges(data=True)]
 
 
+def annotate_edges(G, graph_crs, metric_crs, dem: MetricDEM, ds: float = DS) -> None:
+    """Add length_2d, length_3d and dh_up [m] to every edge, in place.
 
-def extract_population_to_cells(
-    cells_gdf: gpd.GeoDataFrame,
-    worldpop_file: Path,
-    fua_gdf: gpd.GeoDataFrame,
-) -> gpd.GeoDataFrame:
-    if not worldpop_file.exists():
-        raise FileNotFoundError(f"WorldPop file not found: {worldpop_file}")
+    Each edge polyline is transformed to the metric CRS, resampled every `ds`
+    metres along its length, and the DEM is sampled at those points. The edge
+    geometry is oriented u -> v before sampling, because uphill gain depends
+    on the direction of travel.
+    """
+    to_m = Transformer.from_crs(graph_crs, metric_crs, always_xy=True)
+    edges = iter_edges(G)
 
-    with rasterio.open(worldpop_file) as src:
-        pop_crs = src.crs
-
-        cells_pop = cells_gdf.to_crs(pop_crs)
-        fua_pop = fua_gdf.to_crs(pop_crs)
-
-        try:
-            fua_geom = fua_pop.geometry.union_all()
-        except AttributeError:
-            fua_geom = fua_pop.geometry.unary_union
-
-        cells_pop["in_fua"] = cells_pop.geometry.intersects(fua_geom)
-        cells_to_process = cells_pop[cells_pop["in_fua"]].copy()
-
-        print(f"  Cells inside FUA: {len(cells_to_process):,} / {len(cells_gdf):,}")
-
-        populations = []
-
-        for idx, row in tqdm(
-            cells_to_process.iterrows(),
-            total=len(cells_to_process),
-            desc="Extracting population inside FUA",
-        ):
-            try:
-                out_image, _ = mask(src, [row.geometry], crop=True, nodata=0)
-                pop = float(out_image.sum())
-                populations.append((row.name, max(0.0, pop)))
-            except Exception:
-                populations.append((row.name, 0.0))
-
-    cells_gdf = cells_gdf.copy()
-    cells_gdf["population"] = 0.0
-
-    for idx, pop in populations:
-        cells_gdf.loc[idx, "population"] = pop
-
-    cells_gdf = cells_gdf[cells_gdf["population"] > MIN_POPULATION_CELL].copy()
-    cells_gdf.reset_index(drop=True, inplace=True)
-
-    if cells_gdf.empty:
-        raise ValueError("No populated cells inside FUA after filtering.")
-
-    print(f"  Populated cells inside FUA: {len(cells_gdf):,}")
-    print(f"  Total population inside FUA: {cells_gdf['population'].sum():,.0f}")
-
-    return cells_gdf
-
-
-
-def assign_nearest_nodes(cells_gdf, nodes_df, nodes_wm):
-    node_coords = np.array([[geom.x, geom.y] for geom in nodes_wm.geometry])
-    tree = KDTree(node_coords)
-
-    cell_coords = np.array(
-        [[row.centroid_x, row.centroid_y] for _, row in cells_gdf.iterrows()]
-    )
-
-    distances, indices = tree.query(cell_coords, k=1)
-
-    cells_gdf = cells_gdf.copy()
-    cells_gdf["nearest_node"] = nodes_df.iloc[indices]["node_id"].values
-    cells_gdf["node_distance"] = distances
-
-    print(f"  Mean distance cell → nearest node: {distances.mean():.1f} m")
-    print(f"  Max distance cell → nearest node: {distances.max():.1f} m")
-
-    return cells_gdf
-
-
-def get_edge_data(G, u, v, key=None):
-    data = G.get_edge_data(u, v)
-
-    if data is None:
-        return {}
-
-    if key is not None and isinstance(data, dict) and key in data:
-        return data[key]
-
-    if isinstance(data, dict):
-        first_val = next(iter(data.values()))
-        if isinstance(first_val, dict):
-            return first_val
-
-    return data
-
-
-def compute_edge_vertical_gain_m(G, u, v, key, dem_src, ds=10.0):
-    edge_data = get_edge_data(G, u, v, key)
-
-    geom = edge_data.get("geometry", None)
-
-    if geom is None:
-        x1, y1 = G.nodes[u]["x"], G.nodes[u]["y"]
-        x2, y2 = G.nodes[v]["x"], G.nodes[v]["y"]
-        geom = LineString([(x1, y1), (x2, y2)])
-
-    length = float(geom.length)
-    n_pts = max(int(length / ds) + 1, 2)
-    dists = np.linspace(0, length, n_pts)
-
-    pts = [geom.interpolate(d) for d in dists]
-    coords = [(pt.x, pt.y) for pt in pts]
-
-    elevs = np.array([val[0] for val in dem_src.sample(coords)], dtype=float)
-
-    vertical_gain_m = 0.0
-
-    for h1, h2 in zip(elevs[:-1], elevs[1:]):
-        if np.isfinite(h1) and np.isfinite(h2) and h2 > h1:
-            vertical_gain_m += float(h2 - h1)
-
-    return vertical_gain_m
-
-
-def precompute_edge_vertical_gain(G, dem_file: Path) -> dict:
-    edge_vertical_gain_m = {}
-
-    with rasterio.open(dem_file) as dem_src:
-        if getattr(G, "is_multigraph", lambda: False)():
-            iterator = G.edges(keys=True)
-            for u, v, key in tqdm(
-                iterator,
-                desc="Precomputing edge vertical gain",
-                total=G.number_of_edges(),
-            ):
-                edge_vertical_gain_m[(u, v, key)] = compute_edge_vertical_gain_m(
-                    G, u, v, key, dem_src, ds=DS
-                )
+    coords = []
+    for u, v, _, data in edges:
+        xu, yu = G.nodes[u]["x"], G.nodes[u]["y"]
+        xv, yv = G.nodes[v]["x"], G.nodes[v]["y"]
+        geom = data.get("geometry")
+        if geom is None:
+            c = np.array([[xu, yu], [xv, yv]], dtype=float)
         else:
-            iterator = G.edges()
-            for u, v in tqdm(
-                iterator,
-                desc="Precomputing edge vertical gain",
-                total=G.number_of_edges(),
-            ):
-                edge_vertical_gain_m[(u, v, 0)] = compute_edge_vertical_gain_m(
-                    G, u, v, 0, dem_src, ds=DS
-                )
+            c = np.asarray(geom.coords, dtype=float)[:, :2]
+            if np.hypot(c[0, 0] - xu, c[0, 1] - yu) > np.hypot(c[-1, 0] - xu, c[-1, 1] - yu):
+                c = c[::-1]
+        coords.append(c)
 
-    return edge_vertical_gain_m
+    sizes = np.array([len(c) for c in coords])
+    offsets = np.concatenate([[0], np.cumsum(sizes)])
+    flat = np.concatenate(coords)
+    mx, my = to_m.transform(flat[:, 0], flat[:, 1])
 
+    n_void_edges = 0
+    for i, (_, _, _, data) in enumerate(tqdm(edges, desc="Edges: 3-D length and uphill gain")):
+        x = mx[offsets[i]:offsets[i + 1]]
+        y = my[offsets[i]:offsets[i + 1]]
+        seg = np.hypot(np.diff(x), np.diff(y))
+        L2 = float(seg.sum())
 
-def edge_length_and_vertical_gain(G, edge_vertical_gain_m, u, v):
-    data = G.get_edge_data(u, v)
-
-    if data is None:
-        return 0.0, 0.0
-
-    if isinstance(data, dict):
-        first_val = next(iter(data.values()))
-        if isinstance(first_val, dict):
-            key = list(data.keys())[0]
-            edge_data = data[key]
-        else:
-            key = 0
-            edge_data = data
-    else:
-        key = 0
-        edge_data = {}
-
-    length_m = edge_data.get("length", 0.0)
-    vertical_gain_m = edge_vertical_gain_m.get((u, v, key), 0.0)
-
-    return float(length_m), float(vertical_gain_m)
-
-
-def path_components(G, edge_vertical_gain_m, source, target):
-    path = nx.shortest_path(G, source=source, target=target, weight="length")
-
-    length_m = 0.0
-    vertical_gain_m = 0.0
-
-    for u, v in zip(path[:-1], path[1:]):
-        le, vg = edge_length_and_vertical_gain(G, edge_vertical_gain_m, u, v)
-        length_m += le
-        vertical_gain_m += vg
-
-    return length_m, vertical_gain_m
-
-
-
-def select_candidate_cells(cells_gdf: gpd.GeoDataFrame, max_candidates: int) -> gpd.GeoDataFrame:
-    cells = cells_gdf.copy()
-
-    center_x = np.average(cells["centroid_x"], weights=cells["population"])
-    center_y = np.average(cells["centroid_y"], weights=cells["population"])
-
-    cells["dist_to_center"] = np.sqrt(
-        (cells["centroid_x"] - center_x) ** 2
-        + (cells["centroid_y"] - center_y) ** 2
-    )
-
-    q_pop = cells["population"].quantile(0.65)
-    q_near = cells["dist_to_center"].quantile(0.50)
-    q_far = cells["dist_to_center"].quantile(0.75)
-
-    high_pop = cells[cells["population"] >= q_pop]
-    central = cells[cells["dist_to_center"] <= q_near]
-    peripheral = cells[cells["dist_to_center"] >= q_far]
-
-    selected = pd.concat(
-        [
-            high_pop.nlargest(max_candidates // 2, "population"),
-            central.nlargest(max_candidates // 4, "population"),
-            peripheral.nlargest(max_candidates // 4, "population"),
-        ]
-    ).drop_duplicates(subset=["cell_id"])
-
-    if len(selected) > max_candidates:
-        selected = selected.nlargest(max_candidates, "population")
-
-    selected = gpd.GeoDataFrame(selected, geometry="geometry", crs=cells_gdf.crs)
-    selected.reset_index(drop=True, inplace=True)
-
-    return selected
-
-
-
-def compute_densification_cost_for_cell(
-    candidate_cell,
-    cells_gdf,
-    distance_matrix,
-    G,
-    edge_vertical_gain_m,
-    d_0,
-):
-    populations = cells_gdf["population"].values.copy()
-
-    test_cell_idx = cells_gdf[cells_gdf["cell_id"] == candidate_cell["cell_id"]].index[0]
-    populations[test_cell_idx] += NEW_RESIDENTS
-
-    distances_from_test = distance_matrix[test_cell_idx, :]
-
-    attractions = populations**ALPHA * np.exp(-distances_from_test / d_0)
-    attractions[test_cell_idx] = 0.0
-
-    total_attraction = attractions.sum()
-
-    if total_attraction <= 0:
-        return None
-
-    trip_probabilities = attractions / total_attraction
-    total_trips = NEW_RESIDENTS * TRIPS_PER_PERSON_PER_DAY
-    trips_to_destinations = total_trips * trip_probabilities
-
-    significant_destinations = np.where(
-        trip_probabilities > GRAVITY_DESTINATION_THRESHOLD
-    )[0]
-
-    test_node = candidate_cell["nearest_node"]
-
-    total_energy_J = 0.0
-    total_vertical_energy_J = 0.0
-    total_vertical_gain_m = 0.0
-    total_horizontal_distance_m = 0.0
-    total_horizontal_energy_J = 0.0
-
-    successful_routes = 0
-    failed_routes = 0
-    total_route_distance_m = 0.0
-    weighted_distance_m = 0.0
-
-    for dest_idx in significant_destinations:
-        dest_cell = cells_gdf.iloc[dest_idx]
-        dest_node = dest_cell["nearest_node"]
-        n_trips = trips_to_destinations[dest_idx]
-
-        if n_trips < 1:
+        if L2 <= 0:
+            data["length_2d"] = data["length_3d"] = data["dh_up"] = 0.0
             continue
 
-        try:
-            length_out_m, vertical_out_m = path_components(
-                G, edge_vertical_gain_m, test_node, dest_node
-            )
+        cum = np.concatenate([[0.0], np.cumsum(seg)])
+        n = max(int(np.ceil(L2 / ds)) + 1, 2)
+        s = np.linspace(0.0, L2, n)
+        h = dem.sample(np.interp(s, cum, x), np.interp(s, cum, y))
 
-            length_ret_m, vertical_ret_m = path_components(
-                G, edge_vertical_gain_m, dest_node, test_node
-            )
+        dh = np.diff(h)
+        bad = ~np.isfinite(dh)
+        if bad.any():
+            n_void_edges += 1
+            dh[bad] = 0.0
 
-            vertical_gain_per_trip_m = vertical_out_m + vertical_ret_m
-            horizontal_distance_per_trip_m = length_out_m + length_ret_m
+        step = L2 / (n - 1)
+        data["length_2d"] = L2
+        data["length_3d"] = float(np.sqrt(step ** 2 + dh ** 2).sum())
+        data["dh_up"] = float(np.clip(dh, 0.0, None).sum())
 
-            vertical_energy_per_trip_J = M_PHYS_KG * G_PHYS * vertical_gain_per_trip_m
-            horizontal_energy_per_trip_J = HORIZONTAL_COST_WEIGHT * horizontal_distance_per_trip_m
-            total_energy_per_trip_J = vertical_energy_per_trip_J + horizontal_energy_per_trip_J
+    print(f"  Edges annotated: {len(edges):,} (with DEM voids: {n_void_edges:,})")
 
-            total_vertical_gain_m += n_trips * vertical_gain_per_trip_m
-            total_vertical_energy_J += n_trips * vertical_energy_per_trip_J
-            total_horizontal_distance_m += n_trips * horizontal_distance_per_trip_m
-            total_horizontal_energy_J += n_trips * horizontal_energy_per_trip_J
-            total_energy_J += n_trips * total_energy_per_trip_J
 
-            total_route_distance_m += length_out_m
-            weighted_distance_m += length_out_m * n_trips
+def graph_node_coords(G, graph_crs, metric_crs):
+    nodes = list(G.nodes())
+    x = np.array([G.nodes[n]["x"] for n in nodes], dtype=float)
+    y = np.array([G.nodes[n]["y"] for n in nodes], dtype=float)
+    mx, my = Transformer.from_crs(graph_crs, metric_crs, always_xy=True).transform(x, y)
+    return nodes, np.column_stack([mx, my])
 
-            successful_routes += 1
 
-        except (nx.NetworkXNoPath, nx.NodeNotFound, KeyError):
-            failed_routes += 1
+def assign_nearest_nodes(cells, nodes, node_xy) -> gpd.GeoDataFrame:
+    dist, idx = KDTree(node_xy).query(cells[["centroid_x", "centroid_y"]].to_numpy(), k=1)
+    cells = cells.copy()
+    cells["nearest_node"] = [nodes[i] for i in idx]
+    cells["node_distance"] = dist
+    print(f"  Cell centroid -> nearest node: mean {dist.mean():.0f} m, max {dist.max():.0f} m")
+    return cells
+
+
+def edge_cost_terms(G, u, v):
+    """(horizontal length, uphill gain) of the edge u->v actually used by
+    Dijkstra, i.e. the parallel edge with minimum routing weight."""
+    data = G.get_edge_data(u, v)
+    if G.is_multigraph():
+        data = min(data.values(), key=lambda d: d.get(ROUTING_WEIGHT, np.inf))
+    return data[HORIZONTAL_LENGTH_ATTR], data["dh_up"]
+
+
+def tree_sums(pred: dict, source, targets, edge_fn) -> dict:
+    """Cumulative (length, uphill gain) from `source` to each target along the
+    shortest-path tree `pred`, memoised so shared prefixes are summed once.
+    edge_fn(parent, child) returns the costs of the tree edge parent->child."""
+    cache = {source: (0.0, 0.0)}
+    out = {}
+    for t in targets:
+        if t in out:
             continue
+        if t not in pred:
+            out[t] = None
+            continue
+        stack, n = [], t
+        while n not in cache:
+            stack.append(n)
+            n = pred[n][0]
+        L, H = cache[n]
+        while stack:
+            m = stack.pop()
+            l, h = edge_fn(pred[m][0], m)
+            L += l
+            H += h
+            cache[m] = (L, H)
+        out[t] = cache[t]
+    return out
 
-    if successful_routes == 0:
-        return None
 
-    avg_route_distance_m = total_route_distance_m / successful_routes
-    avg_weighted_distance_m = weighted_distance_m / total_trips if total_trips > 0 else np.nan
+# =============================================================================
+# Gravity model: fit of d_0 on empirical flows
+# =============================================================================
+
+def fit_d0_production_constrained(od_file: Path, cells, D: np.ndarray, alpha: float = ALPHA) -> dict:
+    """Fit d_0 of Eq. 4 on empirical working-day OD flows.
+
+    Poisson PML with origin fixed effects; the fixed effects are concentrated
+    out analytically, which leaves the multinomial likelihood of the
+    production-constrained model
+        p_OD = P_D^alpha exp(-d_OD/d_0) / sum_{K != O} P_K^alpha exp(-d_OK/d_0).
+    Zero-flow pairs enter through the normalisation over all destinations.
+    Standard errors are cluster-robust by origin (sandwich estimator).
+    """
+    od = pd.read_csv(od_file)
+    index = {cid: i for i, cid in enumerate(cells["cell_id"].values)}
+    o = od["cell_origin"].map(index)
+    d = od["cell_destination"].map(index)
+    ok = (o.notna() & d.notna()).to_numpy()
+
+    o = o[ok].astype(int).to_numpy()
+    d = d[ok].astype(int).to_numpy()
+    F = od.loc[ok, "count"].to_numpy(dtype=float)
+    keep = (o != d) & (F > 0)
+    o, d, F = o[keep], d[keep], F[keep]
+    if len(F) == 0:
+        raise ValueError("No usable OD flows between populated cells.")
+
+    logP = alpha * np.log(cells["population"].to_numpy(dtype=float))
+    origins, row = np.unique(o, return_inverse=True)
+    Dsub = D[origins]
+    self_mask = np.zeros(Dsub.shape, dtype=bool)
+    self_mask[np.arange(len(origins)), origins] = True
+
+    Fo = np.bincount(row, weights=F, minlength=len(origins))
+    FD = np.bincount(row, weights=F * D[o, d], minlength=len(origins))
+    const = float(np.sum(F * logP[d]))
+
+    def logits(beta):
+        z = logP[None, :] - beta * Dsub
+        z[self_mask] = -np.inf
+        return z
+
+    def neg_ll(log_d0):
+        beta = np.exp(-log_d0)
+        lse = logsumexp(logits(beta), axis=1)
+        return -(const - beta * FD.sum() - np.sum(Fo * lse))
+
+    lo, hi = np.log(200.0), np.log(200_000.0)
+    res = minimize_scalar(neg_ll, bounds=(lo, hi), method="bounded", options={"xatol": 1e-6})
+    if not res.success or abs(res.x - lo) < 1e-3 or abs(res.x - hi) < 1e-3:
+        raise ValueError(f"d_0 fit did not converge inside bounds (log d_0 = {res.x:.3f}).")
+
+    beta = float(np.exp(-res.x))
+    z = logits(beta)
+    p = np.exp(z - logsumexp(z, axis=1, keepdims=True))
+    mean_d = (p * Dsub).sum(axis=1)
+    var_d = (p * Dsub ** 2).sum(axis=1) - mean_d ** 2
+    score = -FD + Fo * mean_d                 # d ll_O / d beta
+    hess = -float(np.sum(Fo * var_d))         # d2 ll / d beta2
+    se_beta = float(np.sqrt(np.sum(score ** 2)) / abs(hess))
 
     return {
-        "cell_id": candidate_cell["cell_id"],
-        "centroid_x": candidate_cell["centroid_x"],
-        "centroid_y": candidate_cell["centroid_y"],
-        "baseline_population": candidate_cell["population"],
-        "new_residents_added": NEW_RESIDENTS,
-        "total_trips": total_trips,
-        "successful_routes": successful_routes,
-        "failed_routes": failed_routes,
-        "avg_route_distance_m": avg_route_distance_m,
-        "avg_weighted_distance_m": avg_weighted_distance_m,
-        "vertical_gain_m": total_vertical_gain_m,
-        "vertical_work_joules": total_vertical_energy_J,
-        "horizontal_distance_weighted_m": total_horizontal_distance_m,
-        "horizontal_cost_joules": total_horizontal_energy_J,
-        "total_work_joules": total_energy_J,
-        "work_per_resident": total_energy_J / NEW_RESIDENTS,
-        "work_per_trip": total_energy_J / total_trips,
-        "vertical_per_resident": total_vertical_energy_J / NEW_RESIDENTS,
-        "horizontal_per_resident": total_horizontal_energy_J / NEW_RESIDENTS,
-        "vertical_share_pct": total_vertical_energy_J / total_energy_J * 100,
-        "horizontal_share_pct": total_horizontal_energy_J / total_energy_J * 100,
+        "d_0": 1.0 / beta,
+        "d_0_se": se_beta / beta ** 2,
+        "n_pairs_positive": int(len(F)),
+        "n_origins": int(len(origins)),
+        "n_trips": float(F.sum()),
+        "z_beta": beta / se_beta,
     }
 
 
+# =============================================================================
+# Densification cost of one candidate cell
+# =============================================================================
 
-def _is_far_enough(row, selected_rows, min_dist_m: float) -> bool:
-    if min_dist_m <= 0 or not selected_rows:
-        return True
+def select_candidate_cells(cells, max_candidates: int) -> gpd.GeoDataFrame:
+    c = cells.copy()
+    cx = np.average(c["centroid_x"], weights=c["population"])
+    cy = np.average(c["centroid_y"], weights=c["population"])
+    c["dist_to_center"] = np.hypot(c["centroid_x"] - cx, c["centroid_y"] - cy)
 
-    x = float(row["centroid_x"])
-    y = float(row["centroid_y"])
+    high_pop = c[c["population"] >= c["population"].quantile(0.65)]
+    central = c[c["dist_to_center"] <= c["dist_to_center"].quantile(0.50)]
+    peripheral = c[c["dist_to_center"] >= c["dist_to_center"].quantile(0.75)]
 
-    for s in selected_rows:
-        dx = x - float(s["centroid_x"])
-        dy = y - float(s["centroid_y"])
-        if np.sqrt(dx * dx + dy * dy) < min_dist_m:
-            return False
+    sel = pd.concat([
+        high_pop.nlargest(max_candidates // 2, "population"),
+        central.nlargest(max_candidates // 4, "population"),
+        peripheral.nlargest(max_candidates // 4, "population"),
+    ]).drop_duplicates(subset=["cell_id"])
 
-    return True
+    if len(sel) > max_candidates:
+        sel = sel.nlargest(max_candidates, "population")
+    return sel  # keeps the original index of `cells`
 
 
-def _greedy_select_spaced(
-    df: pd.DataFrame,
-    n: int,
-    sort_col: str,
-    ascending: bool,
-    already_selected: list[dict],
-    min_dist_m: float,
-) -> list[dict]:
-    selected = []
-    pool = df.sort_values(sort_col, ascending=ascending).copy()
+def compute_densification_cost_for_cell(cand_idx: int, cells, D, G, G_rev, d_0):
+    populations = cells["population"].to_numpy(dtype=float)
+    attraction = populations ** ALPHA * np.exp(-D[cand_idx] / d_0)
+    attraction[cand_idx] = 0.0
+    if attraction.sum() <= 0:
+        return None
+    p = attraction / attraction.sum()
 
-    for _, row in pool.iterrows():
-        row_dict = row.to_dict()
-        if _is_far_enough(row_dict, already_selected + selected, min_dist_m):
-            selected.append(row_dict)
-        if len(selected) >= n:
+    dests = np.flatnonzero(p > GRAVITY_DESTINATION_THRESHOLD)
+    dest_nodes = cells["nearest_node"].to_numpy()[dests]
+    source = cells.at[cand_idx, "nearest_node"]
+
+    pred_out, _ = nx.dijkstra_predecessor_and_distance(G, source, weight=ROUTING_WEIGHT)
+    pred_ret, _ = nx.dijkstra_predecessor_and_distance(G_rev, source, weight=ROUTING_WEIGHT)
+
+    out = tree_sums(pred_out, source, dest_nodes, lambda a, b: edge_cost_terms(G, a, b))
+    # in the reversed graph a->b corresponds to the original edge b->a
+    ret = tree_sums(pred_ret, source, dest_nodes, lambda a, b: edge_cost_terms(G, b, a))
+
+    p_routed = 0.0
+    len_w = 0.0
+    gain_w = 0.0
+    failed = 0
+    for j, node in zip(dests, dest_nodes):
+        a, b = out.get(node), ret.get(node)
+        if a is None or b is None:
+            failed += 1
+            continue
+        p_routed += p[j]
+        len_w += p[j] * (a[0] + b[0])
+        gain_w += p[j] * (a[1] + b[1])
+
+    if p_routed <= 0:
+        return None
+
+    n_round_trips = NEW_RESIDENTS * ROUND_TRIPS_PER_PERSON_PER_DAY
+    mean_rt_length = len_w / p_routed          # per round trip [m]
+    mean_rt_gain = gain_w / p_routed           # per round trip [m]
+
+    W_hor = LAMBDA_J_PER_M * n_round_trips * mean_rt_length
+    W_alt = M_PHYS_KG * G_PHYS * n_round_trips * mean_rt_gain
+    W_tot = W_hor + W_alt
+
+    return {
+        "cell_id": cells.at[cand_idx, "cell_id"],
+        "centroid_x": cells.at[cand_idx, "centroid_x"],
+        "centroid_y": cells.at[cand_idx, "centroid_y"],
+        "baseline_population": cells.at[cand_idx, "population"],
+        "new_residents_added": NEW_RESIDENTS,
+        "round_trips": n_round_trips,
+        "n_destinations_routed": int(len(dests) - failed),
+        "n_destinations_failed": int(failed),
+        "prob_share_above_threshold": float(p[dests].sum()),
+        "prob_share_routed": float(p_routed),
+        "mean_round_trip_length_m": mean_rt_length,
+        "mean_round_trip_uphill_m": mean_rt_gain,
+        "vertical_work_joules": W_alt,
+        "horizontal_cost_joules": W_hor,
+        "total_work_joules": W_tot,
+        "work_per_resident": W_tot / NEW_RESIDENTS,
+        "vertical_per_resident": W_alt / NEW_RESIDENTS,
+        "horizontal_per_resident": W_hor / NEW_RESIDENTS,
+        "vertical_share_pct": 100 * W_alt / W_tot,
+        "horizontal_share_pct": 100 * W_hor / W_tot,
+    }
+
+
+# =============================================================================
+# Selection of favourable / unfavourable cells
+# =============================================================================
+
+def _greedy_select_spaced(df, n, ascending, already, min_dist_m):
+    chosen = []
+    for _, row in df.sort_values("vertical_work_joules", ascending=ascending).iterrows():
+        r = row.to_dict()
+        if min_dist_m > 0 and any(
+            np.hypot(r["centroid_x"] - s["centroid_x"], r["centroid_y"] - s["centroid_y"]) < min_dist_m
+            for s in already + chosen
+        ):
+            continue
+        chosen.append(r)
+        if len(chosen) >= n:
             break
-
-    return selected
+    return chosen
 
 
 def select_favorable_unfavorable(results_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Select favorable/unfavorable cells at comparable horizontal accessibility.
-
-    Favorable:
-        lowest vertical energy.
-
-    Unfavorable:
-        highest vertical energy.
-
-    Extra constraints:
-        selected cells should be spatially separated so that map circles do not overlap.
-    """
+    """Lowest / highest altitudinal work among candidates whose horizontal cost
+    is within a tolerance of the median, with a minimum spacing between cells."""
     df = results_df.copy()
+    h_ref, tol_used, comparable = np.nan, np.nan, df
 
-    if not HORIZONTAL_COMPARABILITY_MODE:
-        comparable_df = df.copy()
-        h_ref = np.nan
-        selected_tolerance = np.nan
-    else:
-        if HORIZONTAL_REFERENCE == "best":
-            h_ref = df.loc[df["total_work_joules"].idxmin(), "horizontal_cost_joules"]
-        else:
-            h_ref = df["horizontal_cost_joules"].median()
-
-        comparable_df = pd.DataFrame()
-        selected_tolerance = None
-
+    if HORIZONTAL_COMPARABILITY_MODE:
+        h = df["horizontal_cost_joules"]
+        h_ref = (df.loc[df["total_work_joules"].idxmin(), "horizontal_cost_joules"]
+                 if HORIZONTAL_REFERENCE == "best" else h.median())
         for tol in HORIZONTAL_TOLERANCES:
-            tmp = df[
-                (df["horizontal_cost_joules"] >= h_ref * (1 - tol))
-                & (df["horizontal_cost_joules"] <= h_ref * (1 + tol))
-            ].copy()
-
+            tmp = df[(h >= h_ref * (1 - tol)) & (h <= h_ref * (1 + tol))]
             if len(tmp) >= MIN_COMPARABLE_CELLS:
-                comparable_df = tmp
-                selected_tolerance = tol
+                comparable, tol_used = tmp, tol
                 break
 
-        if comparable_df.empty:
-            comparable_df = df.copy()
-            selected_tolerance = np.nan
-
-    ranking_col = "vertical_work_joules"
-
-    selected_rows = []
-    used_distance = None
-
+    selected_rows, used_distance = [], 0.0
     for relax in MIN_SELECTED_DISTANCE_RELAXATION:
         min_dist = MIN_SELECTED_DISTANCE_M * relax
-
-        favorable_rows = _greedy_select_spaced(
-            comparable_df,
-            n=N_FAVORABLE,
-            sort_col=ranking_col,
-            ascending=True,
-            already_selected=[],
-            min_dist_m=min_dist,
-        )
-
-        unfavorable_rows = _greedy_select_spaced(
-            comparable_df,
-            n=N_UNFAVORABLE,
-            sort_col=ranking_col,
-            ascending=False,
-            already_selected=favorable_rows,
-            min_dist_m=min_dist,
-        )
-
-        if len(favorable_rows) == N_FAVORABLE and len(unfavorable_rows) == N_UNFAVORABLE:
-            selected_rows = favorable_rows + unfavorable_rows
-            used_distance = min_dist
+        fav = _greedy_select_spaced(comparable, N_FAVORABLE, True, [], min_dist)
+        unf = _greedy_select_spaced(comparable, N_UNFAVORABLE, False, fav, min_dist)
+        if len(fav) == N_FAVORABLE and len(unf) == N_UNFAVORABLE:
+            selected_rows, used_distance = fav + unf, min_dist
             break
 
-    if not selected_rows:
-        favorable_rows = _greedy_select_spaced(
-            comparable_df,
-            n=N_FAVORABLE,
-            sort_col=ranking_col,
-            ascending=True,
-            already_selected=[],
-            min_dist_m=0.0,
-        )
-
-        unfavorable_rows = _greedy_select_spaced(
-            comparable_df,
-            n=N_UNFAVORABLE,
-            sort_col=ranking_col,
-            ascending=False,
-            already_selected=favorable_rows,
-            min_dist_m=0.0,
-        )
-
-        selected_rows = favorable_rows + unfavorable_rows
-        used_distance = 0.0
-
-    selected = pd.DataFrame(selected_rows)
-
-    selected["scenario_type"] = (
-        ["favorable"] * N_FAVORABLE
-        + ["unfavorable"] * N_UNFAVORABLE
-    )
-
-    selected = selected.sort_values(ranking_col, ascending=True).reset_index(drop=True)
-
-    selected["rank_total"] = np.arange(1, len(selected) + 1)
-    selected["zone_label"] = [
-        f"Favorable {i + 1}" if i < N_FAVORABLE else f"Unfavorable {i - N_FAVORABLE + 1}"
-        for i in range(len(selected))
-    ]
-    selected["zone_color"] = ZONE_COLORS[: len(selected)]
-
-    selected["selection_ranking_col"] = ranking_col
-    selected["horizontal_reference_joules"] = h_ref
-    selected["horizontal_tolerance_used"] = selected_tolerance
-    selected["min_selected_distance_used_m"] = used_distance
-    selected["horizontal_cost_relative_to_ref_pct"] = (
-        (selected["horizontal_cost_joules"] / h_ref - 1.0) * 100
-        if np.isfinite(h_ref) and h_ref != 0
-        else np.nan
+    sel = pd.DataFrame(selected_rows)
+    sel["scenario_type"] = ["favorable"] * N_FAVORABLE + ["unfavorable"] * N_UNFAVORABLE
+    sel = sel.sort_values("vertical_work_joules").reset_index(drop=True)
+    sel["rank_total"] = np.arange(1, len(sel) + 1)
+    sel["zone_label"] = [f"Favorable {i + 1}" if i < N_FAVORABLE
+                         else f"Unfavorable {i - N_FAVORABLE + 1}" for i in range(len(sel))]
+    sel["zone_color"] = ZONE_COLORS[:len(sel)]
+    sel["horizontal_reference_joules"] = h_ref
+    sel["horizontal_tolerance_used"] = tol_used
+    sel["min_selected_distance_used_m"] = used_distance
+    sel["horizontal_cost_relative_to_ref_pct"] = (
+        (sel["horizontal_cost_joules"] / h_ref - 1.0) * 100 if np.isfinite(h_ref) else np.nan
     )
 
     print("\n[selection diagnostic]")
-    print(f"  mode: horizontal-comparable vertical ranking")
-    print(f"  ranking column: {ranking_col}")
-    print(f"  horizontal reference: {h_ref:,.0f} J")
-    print(f"  tolerance used: {selected_tolerance}")
-    print(f"  comparable cells: {len(comparable_df)} / {len(df)}")
+    print(f"  horizontal reference (median): {h_ref / 1e9:,.2f} GJ")
+    print(f"  tolerance used: {tol_used}")
+    print(f"  comparable cells: {len(comparable)} / {len(df)}")
     print(f"  min selected distance used: {used_distance:,.0f} m")
-    print(f"  vertical range selected: {selected['vertical_work_joules'].min()/1e9:.2f}–{selected['vertical_work_joules'].max()/1e9:.2f} GJ")
-
-    return selected
+    return sel
 
 
+# =============================================================================
+# Plots
+# =============================================================================
 
-def add_dem_contours_to_ax(
-    ax,
-    city: str,
-    dem_file: Path,
-    levels_n: int = MAP_CONTOUR_LEVELS,
-    downsample: int = MAP_DEM_DOWNSAMPLE,
-):
-    with rasterio.open(dem_file) as src:
-        dem = src.read(
-            1,
-            out_shape=(src.height // downsample, src.width // downsample),
-            resampling=Resampling.bilinear,
-        ).astype("float32")
-
-        bounds = src.bounds
-        nodata = src.nodata
-
-    if nodata is not None:
-        dem[dem == nodata] = np.nan
-
-    dem[~np.isfinite(dem)] = np.nan
-
-    if np.all(~np.isfinite(dem)):
-        print(f"[{city}] DEM contour skipped: invalid DEM")
-        return
-
-    levels = np.linspace(
-        np.nanpercentile(dem, 2),
-        np.nanpercentile(dem, 98),
-        levels_n,
-    )
-
-    contours = ax.contour(
-        dem,
-        levels=levels,
-        extent=[bounds.left, bounds.right, bounds.bottom, bounds.top],
-        colors="black",
-        linewidths=MAP_CONTOUR_LINEWIDTH,
-        alpha=MAP_CONTOUR_ALPHA,
-        zorder=12,
-    )
-
-    ax.clabel(
-        contours,
-        contours.levels[::MAP_CONTOUR_LABEL_EVERY],
-        inline=True,
-        fontsize=FONT_CONTOUR_LABEL,
-        fmt="%.0f m",
-    )
-
-def make_city_plots(city, cells_gdf, selected_df, output_dir, dem_file: Path):
+def make_city_plots(city, cells, selected_df, output_dir: Path):
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    selected_cells = cells_gdf[cells_gdf["cell_id"].isin(selected_df["cell_id"])].copy()
-
-    selected_cells = selected_cells.merge(
-        selected_df[
-            [
-                "cell_id",
-                "scenario_type",
-                "zone_label",
-                "zone_color",
-                "total_work_joules",
-                "vertical_work_joules",
-                "horizontal_cost_joules",
-                "work_per_resident",
-                "vertical_share_pct",
-                "horizontal_share_pct",
-                "rank_total",
-            ]
-        ],
-        on="cell_id",
-        how="left",
-    )
-
-    cells_ll = cells_gdf.to_crs("EPSG:4326")
-    selected_ll = selected_cells.to_crs("EPSG:4326")
+    name = DISPLAY_NAMES.get(city, city.title())
 
     if MAKE_MAPS:
+        sel_cells = cells[cells["cell_id"].isin(selected_df["cell_id"])].merge(
+            selected_df[["cell_id", "zone_color", "rank_total"]], on="cell_id")
+        cells_ll = cells.to_crs("EPSG:4326")
+        sel_ll = sel_cells.to_crs("EPSG:4326")
+
         fig, ax = plt.subplots(figsize=(12, 10))
-
         cells_ll.plot(ax=ax, facecolor="#e0e0e0", edgecolor="none", alpha=0.25)
+        for _, row in sel_ll.iterrows():
+            gpd.GeoSeries([row.geometry], crs=sel_ll.crs).plot(
+                ax=ax, facecolor=row["zone_color"], edgecolor="black",
+                alpha=0.45, linewidth=2, zorder=10)
+            c = row.geometry.centroid
+            ax.scatter(c.x, c.y, s=850, color=row["zone_color"], edgecolor="black",
+                       linewidth=2, zorder=20)
+            ax.text(c.x, c.y, str(int(row["rank_total"])), ha="center", va="center",
+                    fontsize=FONT_MAP_NUMBER, weight="bold", zorder=30)
 
-        for _, row in selected_ll.iterrows():
-            color = row["zone_color"]
-            centroid = row.geometry.centroid
-
-            gpd.GeoSeries([row.geometry], crs=selected_ll.crs).plot(
-                ax=ax,
-                facecolor=color,
-                edgecolor="black",
-                alpha=0.45,
-                linewidth=2,
-                zorder=10,
-            )
-
-            ax.scatter(
-                centroid.x,
-                centroid.y,
-                s=850,
-                color=color,
-                edgecolor="black",
-                linewidth=2,
-                zorder=20,
-            )
-
-            ax.text(
-                centroid.x,
-                centroid.y,
-                str(int(row["rank_total"])),
-                ha="center",
-                va="center",
-                fontsize=FONT_MAP_NUMBER,
-                weight="bold",
-                color="black",
-                zorder=30,
-            )
-
-        # Focus the map on the analyzed area (selected cells) BEFORE fetching the
-        # basemap, so contextily picks tiles for the final zoomed-in extent rather
-        # than the full city (which would then be upsampled/blurred when cropped).
+        minx, miny, maxx, maxy = sel_ll.total_bounds
+        pad_x = (maxx - minx) * 0.25 or 0.01
+        pad_y = (maxy - miny) * 0.25 or 0.01
+        ax.set_xlim(minx - pad_x, maxx + pad_x)
+        ax.set_ylim(miny - pad_y, maxy + pad_y)
         try:
-            if not selected_ll.empty:
-                minx, miny, maxx, maxy = selected_ll.total_bounds
-                # add 25% padding of the width/height (fallback to small value)
-                pad_x = (maxx - minx) * 0.25 if (maxx - minx) > 0 else 0.01
-                pad_y = (maxy - miny) * 0.25 if (maxy - miny) > 0 else 0.01
-                ax.set_xlim(minx - pad_x, maxx + pad_x)
-                ax.set_ylim(miny - pad_y, maxy + pad_y)
-            else:
-                # fallback to full cells extent with smaller padding
-                minx, miny, maxx, maxy = cells_ll.total_bounds
-                pad_x = (maxx - minx) * 0.10 if (maxx - minx) > 0 else 0.01
-                pad_y = (maxy - miny) * 0.10 if (maxy - miny) > 0 else 0.01
-                ax.set_xlim(minx - pad_x, maxx + pad_x)
-                ax.set_ylim(miny - pad_y, maxy + pad_y)
-        except Exception as e:
-            print(f"[{city}] Could not set focused extent: {e}")
-
-        try:
-            ctx.add_basemap(
-                ax,
-                crs=cells_ll.crs,
-                source=MAP_BASEMAP_PROVIDER,
-                alpha=1,
-                attribution=False,
-                zorder=1,
-            )
+            ctx.add_basemap(ax, crs=cells_ll.crs, source=MAP_BASEMAP_PROVIDER,
+                            attribution=False, zorder=1)
         except Exception as e:
             print(f"[{city}] Could not add basemap: {e}")
 
-        # try:
-        #     add_dem_contours_to_ax(
-        #         ax=ax,
-        #         city=city,
-        #         dem_file=dem_file,
-        #     )
-        # except Exception as e:
-        #     print(f"[{city}] Could not add DEM contours: {e}")
-
-        legend_handles = [
-            Patch(
-                facecolor=row["zone_color"],
-                edgecolor="black",
-                label=f"{int(row['rank_total'])}. {row['zone_label']}",
-            )
-            for _, row in selected_df.iterrows()
-        ]
-        ax.legend(handles=legend_handles, loc="lower right", frameon=True, fontsize=FONT_LEGEND)
-
-        ax.set_title(f"{city.title()}")
+        ax.legend(handles=[Patch(facecolor=r["zone_color"], edgecolor="black",
+                                 label=f"{int(r['rank_total'])}. {r['zone_label']}")
+                           for _, r in selected_df.iterrows()],
+                  loc="lower right", frameon=True, fontsize=FONT_LEGEND)
+        ax.set_title(name, fontsize=FONT_TITLE)
         ax.set_xlabel("Longitude", fontsize=FONT_LABEL)
         ax.set_ylabel("Latitude", fontsize=FONT_LABEL)
         ax.tick_params(axis="both", labelsize=FONT_TICK)
         ax.set_aspect("equal")
         ax.grid(True, alpha=0.25, linestyle="--")
-
         fig.tight_layout()
-        fig.savefig(output_dir / f"{city}_selected_densification_map.png", dpi=300, bbox_inches="tight")
-        fig.savefig(output_dir / f"{city}_selected_densification_map.pdf", dpi=300, bbox_inches="tight")
+        for ext in ("png", "pdf"):
+            fig.savefig(output_dir / f"{city}_selected_densification_map.{ext}",
+                        dpi=300, bbox_inches="tight")
         plt.close(fig)
 
     if MAKE_CHARTS:
-        plot_df = selected_df.copy().reset_index(drop=True)
+        df = selected_df.reset_index(drop=True)
+        x = np.arange(len(df))
+        colors = df["zone_color"].tolist()
+        v_gj = df["vertical_work_joules"] / 1e9
+        h_gj = df["horizontal_cost_joules"] / 1e9
+        t_gj = df["total_work_joules"] / 1e9
 
-        x = np.arange(len(plot_df))
-        colors = plot_df["zone_color"].tolist()
+        def finish(ax, ylabel, fname, title=True):
+            ax.set_xticks(x)
+            ax.set_xticklabels(df["zone_label"], rotation=20, fontsize=FONT_TICK)
+            ax.set_ylabel(ylabel, fontsize=FONT_LABEL)
+            ax.tick_params(axis="y", labelsize=FONT_TICK)
+            if title:
+                ax.set_title(name, fontsize=FONT_TITLE)
+            ax.grid(True, axis="y", alpha=0.3, linestyle="--")
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            ax.figure.tight_layout()
+            for ext in ("png", "pdf"):
+                ax.figure.savefig(output_dir / f"{city}_{fname}.{ext}", dpi=300, bbox_inches="tight")
+            plt.close(ax.figure)
 
-        # Main chart: vertical energy only
+        # Fig. 7b: altitudinal (solid) + horizontal (transparent)
         fig, ax = plt.subplots(figsize=(12, 7))
+        ax.bar(x, v_gj, color=colors, edgecolor="black", linewidth=1.2, alpha=0.95)
+        ax.bar(x, h_gj, bottom=v_gj, color=colors, edgecolor="black", linewidth=1.2, alpha=0.35)
+        ax.legend(handles=[
+            Patch(facecolor="gray", edgecolor="black", alpha=0.95, label="Altitudinal"),
+            Patch(facecolor="gray", edgecolor="black", alpha=0.35, label="Horizontal"),
+        ], loc="lower left", bbox_to_anchor=(0.0, 1.01), ncol=2, borderaxespad=0,
+            fontsize=FONT_LEGEND)
+        finish(ax, "Additional mobility energy (GJ)", "densification_components", title=False)
 
-        vertical_gj = plot_df["vertical_work_joules"] / 1e9
-
-        ax.bar(
-            x,
-            vertical_gj,
-            color=colors,
-            edgecolor="black",
-            linewidth=1.5,
-            alpha=0.90,
-        )
-
-        ymax = max(vertical_gj.max(), 1e-9)
-
-        for i, (_, row) in enumerate(plot_df.iterrows()):
-            h = row["vertical_work_joules"] / 1e9
-            ax.text(
-                i,
-                h + 0.03 * ymax,
-                f"{h:.2f} GJ\n{row['vertical_per_resident'] / 1e6:.2f} MJ/res",
-                ha="center",
-                va="bottom",
-                fontsize=FONT_BAR_TEXT,
-            )
-
-        ax.set_xticks(x)
-        ax.set_xticklabels(plot_df["zone_label"], rotation=20, fontsize=FONT_TICK)
-        ax.set_ylabel("Vertical mobility energy (GJ)", fontsize=FONT_LABEL)
-        ax.set_title(f"{city.title()}")
-        ax.grid(True, axis="y", alpha=0.3, linestyle="--")
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-
-        fig.tight_layout()
-        fig.savefig(output_dir / f"{city}_densification_vertical_energy.png", dpi=300, bbox_inches="tight")
-        fig.savefig(output_dir / f"{city}_densification_vertical_energy.pdf", dpi=300, bbox_inches="tight")
-        plt.close(fig)
-
-        # Total chart: same colors as map
+        # Total energy
         fig, ax = plt.subplots(figsize=(12, 7))
+        ax.bar(x, t_gj, color=colors, edgecolor="black", linewidth=1.5, alpha=0.9)
+        for i, r in df.iterrows():
+            ax.text(i, t_gj[i] * 1.02, f"{t_gj[i]:.1f} GJ\n{r['work_per_resident'] / 1e6:.1f} MJ/res",
+                    ha="center", va="bottom", fontsize=FONT_BAR_TEXT)
+        finish(ax, "Total additional mobility energy (GJ)", "densification_total_energy")
 
-        total_gj = plot_df["total_work_joules"] / 1e9
-
-        ax.bar(
-            x,
-            total_gj,
-            color=colors,
-            edgecolor="black",
-            linewidth=1.5,
-            alpha=0.90,
-        )
-
-        ymax = max(total_gj.max(), 1e-9)
-
-        for i, (_, row) in enumerate(plot_df.iterrows()):
-            h = row["total_work_joules"] / 1e9
-            ax.text(
-                i,
-                h + 0.02 * ymax,
-                f"{h:.2f} GJ\n{row['work_per_resident'] / 1e6:.1f} MJ/res",
-                ha="center",
-                va="bottom",
-                fontsize=FONT_BAR_TEXT,
-            )
-
-        ax.set_xticks(x)
-        ax.set_xticklabels(plot_df["zone_label"], rotation=20, fontsize=FONT_TICK)
-        ax.set_ylabel("Total additional mobility energy (GJ)", fontsize=FONT_LABEL)
-        ax.set_title(f"{city.title()}", fontsize=FONT_TITLE)
-        ax.grid(True, axis="y", alpha=0.3, linestyle="--")
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-
-        fig.tight_layout()
-        fig.savefig(output_dir / f"{city}_densification_total_energy.png", dpi=300, bbox_inches="tight")
-        fig.savefig(output_dir / f"{city}_densification_total_energy.pdf", dpi=300, bbox_inches="tight")
-        plt.close(fig)
-
-        # Component chart: same zone color, solid vertical + transparent horizontal
+        # Altitudinal energy only
         fig, ax = plt.subplots(figsize=(12, 7))
+        ax.bar(x, v_gj, color=colors, edgecolor="black", linewidth=1.5, alpha=0.9)
+        for i, r in df.iterrows():
+            ax.text(i, v_gj[i] * 1.03, f"{v_gj[i]:.1f} GJ\n{r['vertical_per_resident'] / 1e6:.2f} MJ/res",
+                    ha="center", va="bottom", fontsize=FONT_BAR_TEXT)
+        finish(ax, "Altitudinal mobility energy (GJ)", "densification_vertical_energy")
 
-        vertical_gj = plot_df["vertical_work_joules"] / 1e9
-        horizontal_gj = plot_df["horizontal_cost_joules"] / 1e9
 
-        ax.bar(
-            x,
-            vertical_gj,
-            color=colors,
-            edgecolor="black",
-            linewidth=1.2,
-            alpha=0.95,
-            label="Vertical",
+
+def make_combined_figure(city, cells, selected_df, output_dir: Path):
+    """Paper Fig. 7: (a) map of the selected cells, (b) energy components,
+    stacked vertically at single-column width."""
+    name = DISPLAY_NAMES.get(city, city.title())
+    df = selected_df.reset_index(drop=True)
+    colors = df["zone_color"].tolist()
+
+    sel = (cells[cells["cell_id"].isin(df["cell_id"])]
+           .merge(df[["cell_id", "zone_color", "rank_total"]], on="cell_id")
+           .to_crs("EPSG:3857"))
+
+    fig = plt.figure(figsize=(3.4, 4.7))
+    gs = fig.add_gridspec(2, 1, height_ratios=[1.45, 1.0], hspace=0.32)
+    ax_map = fig.add_subplot(gs[0])
+    ax_bar = fig.add_subplot(gs[1])
+
+    # ---- (a) map --------------------------------------------------------
+    for _, row in sel.iterrows():
+        c = row.geometry.centroid
+        ax_map.text(
+            c.x, c.y, str(int(row["rank_total"])),
+            ha="center", va="center", fontsize=6.5, weight="bold", zorder=30, clip_on=True,
+            bbox=dict(boxstyle="square,pad=0.3", facecolor=row["zone_color"],
+                      edgecolor="black", linewidth=0.6, alpha=0.85),
         )
 
-        ax.bar(
-            x,
-            horizontal_gj,
-            bottom=vertical_gj,
-            color=colors,
-            edgecolor="black",
-            linewidth=1.2,
-            alpha=0.35,
-            label="Horizontal",
-        )
+    # Extent: selected cells + padding, enlarged along one axis so that the
+    # map fills the panel with an undistorted (equal) aspect ratio.
+    minx, miny, maxx, maxy = sel.total_bounds
+    pad = max(0.20 * max(maxx - minx, maxy - miny), 2_000.0)
+    cx, cy = 0.5 * (minx + maxx), 0.5 * (miny + maxy)
+    w, h = (maxx - minx) + 2 * pad, (maxy - miny) + 2 * pad
+    bbox = ax_map.get_position()
+    fig_w, fig_h = fig.get_size_inches()
+    box_ratio = (bbox.height * fig_h) / (bbox.width * fig_w)
+    if h / w < box_ratio:
+        h = w * box_ratio
+    else:
+        w = h / box_ratio
+    ax_map.set_xlim(cx - w / 2, cx + w / 2)
+    ax_map.set_ylim(cy - h / 2, cy + h / 2)
+    ax_map.set_aspect("equal", adjustable="box")
+    try:
+        ctx.add_basemap(ax_map, crs="EPSG:3857", source=MAP_BASEMAP_PROVIDER,
+                        attribution=False, zorder=1)
+    except Exception as e:
+        print(f"[{city}] Could not add basemap: {e}")
 
-        ax.set_xticks(x)
-        ax.set_xticklabels(plot_df["zone_label"], rotation=20, fontsize=FONT_TICK)
-        ax.set_ylabel("Additional mobility energy (GJ)", fontsize=FONT_LABEL)
-        ax.tick_params(axis="y", labelsize=FONT_TICK)
-        # ax.set_title(f"{city.title()}", fontsize=FONT_TITLE)
-        ax.legend(
-            handles=[
-                Patch(facecolor="gray", edgecolor="black", alpha=0.95, label="Altitudinal"),
-                Patch(facecolor="gray", edgecolor="black", alpha=0.35, label="Longitudinal"),
-            ],
-            loc="lower left",
-            bbox_to_anchor=(0.0, 1.01),
-            ncol=2,
-            borderaxespad=0,
-            fontsize=FONT_LEGEND,
-        )
-        ax.grid(True, axis="y", alpha=0.3, linestyle="--")
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
+    ax_map.set_xticks([])
+    ax_map.set_yticks([])
+    ax_map.text(0.03, 0.97, name, transform=ax_map.transAxes, ha="left", va="top",
+                fontsize=11, weight="bold", zorder=40)
+    ax_map.legend(
+        handles=[Patch(facecolor=r["zone_color"], edgecolor="black", linewidth=0.6,
+                       label=f"{int(r['rank_total'])}. {r['zone_label']}")
+                 for _, r in df.iterrows()],
+        loc="lower right", fontsize=5.5, frameon=True, handlelength=1.6,
+        borderpad=0.4, labelspacing=0.3,
+    )
 
-        fig.tight_layout()
-        fig.savefig(output_dir / f"{city}_densification_components.png", dpi=300, bbox_inches="tight")
-        fig.savefig(output_dir / f"{city}_densification_components.pdf", dpi=300, bbox_inches="tight")
-        plt.close(fig)
+    # ---- (b) components -------------------------------------------------
+    x = np.arange(len(df))
+    v_gj = df["vertical_work_joules"].to_numpy() / 1e9
+    h_gj = df["horizontal_cost_joules"].to_numpy() / 1e9
+    ax_bar.bar(x, v_gj, color=colors, edgecolor="black", linewidth=0.6, alpha=0.95)
+    ax_bar.bar(x, h_gj, bottom=v_gj, color=colors, edgecolor="black", linewidth=0.6, alpha=0.35)
+
+    ax_bar.set_xticks(x)
+    ax_bar.set_xticklabels(df["zone_label"], rotation=20, ha="right",
+                           rotation_mode="anchor", fontsize=6.5)
+    ax_bar.set_ylabel("Additional mobility energy (GJ)", fontsize=6.5)
+    ax_bar.tick_params(axis="y", labelsize=6.5)
+    ax_bar.spines["top"].set_visible(False)
+    ax_bar.spines["right"].set_visible(False)
+    ax_bar.legend(
+        handles=[Patch(facecolor="gray", edgecolor="black", alpha=0.95, label="Altitudinal"),
+                 Patch(facecolor="gray", edgecolor="black", alpha=0.35, label="Horizontal")],
+        loc="lower left", bbox_to_anchor=(0.0, 1.02), ncol=2, borderaxespad=0,
+        fontsize=6, frameon=True,
+    )
+
+    for ext in ("pdf", "png"):
+        fig.savefig(output_dir / f"{city}_fig7_densification.{ext}", dpi=300, bbox_inches="tight")
+    plt.close(fig)
 
 
+# =============================================================================
+# Driver
+# =============================================================================
 
 def run_city(city: str):
     print(f"\nRUNNING CITY: {city.upper()}")
-
     paths = city_paths(city)
     output_dir = paths["output"]
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    for key in ["cells", "graph", "dem", "worldpop"]:
+    for key in ["cells", "od_working", "graph", "dem", "worldpop"]:
         if not paths[key].exists():
             raise FileNotFoundError(f"[{city}] Missing {key}: {paths[key]}")
 
-    fua_gdf = load_city_fua(city)
+    fua = load_city_fua(city)
+    metric_crs = fua.estimate_utm_crs()
+    print(f"  Metric CRS: {metric_crs.to_string()}")
 
-    cells = load_cells(paths["cells"])
-    cells = extract_population_to_cells(cells, paths["worldpop"], fua_gdf)
+    cells = load_cells(paths["cells"], metric_crs)
+    cells = extract_population_to_cells(cells, paths["worldpop"], fua)
 
     G = load_graph(paths["graph"])
-    nodes_df, nodes_ll, nodes_wm = graph_nodes_gdf(G)
+    graph_crs = G.graph.get("crs", "EPSG:4326")
+    dem = MetricDEM(paths["dem"], metric_crs)
+    annotate_edges(G, graph_crs, metric_crs, dem)
+    G_rev = G.reverse(copy=False)
 
-    cells = assign_nearest_nodes(cells, nodes_df, nodes_wm)
+    nodes, node_xy = graph_node_coords(G, graph_crs, metric_crs)
+    cells = assign_nearest_nodes(cells, nodes, node_xy)
 
-    edge_vertical_gain_m = precompute_edge_vertical_gain(G, paths["dem"])
+    D = cdist(cells[["centroid_x", "centroid_y"]].to_numpy(),
+              cells[["centroid_x", "centroid_y"]].to_numpy())
 
-    candidate_cells = select_candidate_cells(cells, MAX_CANDIDATE_CELLS)
+    fit = fit_d0_production_constrained(paths["od_working"], cells, D)
+    d_0 = fit["d_0"]
+    print(f"[{city}] d_0 = {d_0 / 1000:.2f} km (robust s.e. {fit['d_0_se'] / 1000:.2f} km, "
+          f"z = {fit['z_beta']:.1f}; {fit['n_pairs_positive']:,} positive OD pairs, "
+          f"{fit['n_origins']:,} origins, {fit['n_trips']:,.0f} trips)")
 
-    print(f"[{city}] Populated cells inside FUA: {len(cells):,}")
-    print(f"[{city}] Candidate cells evaluated: {len(candidate_cells):,}")
-
-    cell_centroids = np.array(
-        [[row.centroid_x, row.centroid_y] for _, row in cells.iterrows()]
-    )
-
-    distance_matrix = cdist(cell_centroids, cell_centroids, metric="euclidean")
-
-    pair_weights = np.outer(cells["population"].values, cells["population"].values)
-    np.fill_diagonal(pair_weights, 0.0)
-    d_0 = np.average(distance_matrix, weights=pair_weights)
-
-    print(f"[{city}] Gravity model d_0 (population-weighted mean pairwise distance): {d_0:,.0f} m")
+    candidates = select_candidate_cells(cells, MAX_CANDIDATE_CELLS)
+    print(f"[{city}] Candidate cells evaluated: {len(candidates):,}")
 
     results = []
-
-    for _, candidate in tqdm(
-        candidate_cells.iterrows(),
-        total=len(candidate_cells),
-        desc=f"{city} candidate cells",
-    ):
-        res = compute_densification_cost_for_cell(
-            candidate,
-            cells,
-            distance_matrix,
-            G,
-            edge_vertical_gain_m,
-            d_0,
-        )
-
+    for cand_idx in tqdm(candidates.index, desc=f"{city} candidate cells"):
+        res = compute_densification_cost_for_cell(cand_idx, cells, D, G, G_rev, d_0)
         if res is not None:
             results.append(res)
-
     if not results:
         raise RuntimeError(f"[{city}] No valid candidate results.")
 
-    results_df = pd.DataFrame(results)
-    results_df = results_df.sort_values("total_work_joules")
-
+    results_df = pd.DataFrame(results).sort_values("total_work_joules")
     best = results_df["total_work_joules"].min()
-    results_df["work_increase_vs_best"] = results_df["total_work_joules"] - best
-    results_df["work_increase_pct"] = (
-        results_df["total_work_joules"] / best - 1.0
-    ) * 100
+    results_df["work_increase_pct"] = (results_df["total_work_joules"] / best - 1.0) * 100
+
+    print(f"[{city}] Gravity mass above threshold: "
+          f"{results_df['prob_share_above_threshold'].min():.3f}–"
+          f"{results_df['prob_share_above_threshold'].max():.3f} (renormalised)")
 
     selected_df = select_favorable_unfavorable(results_df)
 
-    results_csv = output_dir / f"{city}_all_candidate_densification_results.csv"
-    selected_csv = output_dir / f"{city}_selected_favorable_unfavorable_cells.csv"
+    for df in (results_df, selected_df):
+        df["city"] = city
+        df["d_0_m"] = d_0
 
-    results_df.to_csv(results_csv, index=False, sep=";")
-    selected_df.to_csv(selected_csv, index=False, sep=";")
+    results_df.to_csv(output_dir / f"{city}_all_candidate_densification_results.csv", index=False, sep=";")
+    selected_df.to_csv(output_dir / f"{city}_selected_favorable_unfavorable_cells.csv", index=False, sep=";")
 
-    selected_gdf = cells[cells["cell_id"].isin(selected_df["cell_id"])].copy()
-    selected_gdf = selected_gdf.merge(selected_df, on="cell_id", how="left")
+    sel_gdf = cells[cells["cell_id"].isin(selected_df["cell_id"])].merge(
+        selected_df.drop(columns=["centroid_x", "centroid_y"]), on="cell_id", how="left")
+    sel_gdf.to_file(output_dir / f"{city}_selected_favorable_unfavorable_cells.gpkg", driver="GPKG")
 
-    if "centroid" in selected_gdf.columns:
-        selected_gdf = selected_gdf.drop(columns=["centroid"])
+    make_city_plots(city, cells, selected_df, output_dir)
+    if MAKE_COMBINED_FIGURE:
+        make_combined_figure(city, cells, selected_df, output_dir)
 
-    selected_gdf.to_file(
-        output_dir / f"{city}_selected_favorable_unfavorable_cells.gpkg",
-        driver="GPKG",
-    )
-
-    make_city_plots(city, cells, selected_df, output_dir, paths["dem"])
-
-    print(f"[{city}] Best comparable-horizontal cell: {selected_df.iloc[0]['cell_id']}")
-    print(f"[{city}] Vertical energy: {selected_df.iloc[0]['vertical_work_joules'] / 1e9:.2f} GJ")
-    print(f"[{city}] Total energy: {selected_df.iloc[0]['total_work_joules'] / 1e9:.2f} GJ")
-    print(f"[{city}] Horizontal deviation from reference: {selected_df.iloc[0]['horizontal_cost_relative_to_ref_pct']:.2f}%")
+    print(f"\n[{city}] Selected cells:")
+    print(selected_df[["zone_label", "cell_id", "horizontal_cost_relative_to_ref_pct",
+                       "horizontal_cost_joules", "vertical_work_joules", "total_work_joules"]]
+          .assign(horizontal_cost_joules=lambda t: t["horizontal_cost_joules"] / 1e9,
+                  vertical_work_joules=lambda t: t["vertical_work_joules"] / 1e9,
+                  total_work_joules=lambda t: t["total_work_joules"] / 1e9)
+          .rename(columns={"horizontal_cost_joules": "W_hor [GJ]",
+                           "vertical_work_joules": "W_alt [GJ]",
+                           "total_work_joules": "W_tot [GJ]"})
+          .to_string(index=False, float_format="%.2f"))
     print(f"[{city}] Saved to: {output_dir}")
-
-    selected_df["city"] = city
-    results_df["city"] = city
 
     return results_df, selected_df
 
 
-
 def parse_args():
     parser = argparse.ArgumentParser(description="Multi-city terrain-aware densification analysis")
-    parser.add_argument(
-        "--city",
-        choices=CITIES,
-        help="Run a single city instead of the full CITIES list",
-    )
+    parser.add_argument("--city", choices=CITIES, help="Run a single city")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-    cities_to_run = [args.city] if args.city else CITIES
+    cities = [args.city] if args.city else CITIES
 
     print("MULTI-CITY TERRAIN-AWARE DENSIFICATION ANALYSIS USING FUA")
     print(f"New residents per test cell: {NEW_RESIDENTS:,}")
-    print(f"M_PHYS_KG: {M_PHYS_KG}")
-    print(f"G_PHYS: {G_PHYS}")
-    print(f"Horizontal lambda: {HORIZONTAL_COST_WEIGHT:.2f} J/m")
-    print(f"FUA file: {FUA_GPKG}")
-    print(f"Output root: {OUTPUT_ROOT}")
-    print(f"Cities to run: {cities_to_run}")
+    print(f"Round trips per resident per day: {ROUND_TRIPS_PER_PERSON_PER_DAY}")
+    print(f"lambda = {LAMBDA_J_PER_M:.1f} J/m, m = {M_PHYS_KG} kg, g = {G_PHYS} m/s^2")
+    print(f"Routing weight: {ROUTING_WEIGHT}; DEM sampling step: {DS} m")
 
-    all_results = []
-    all_selected = []
-
-    for city in cities_to_run:
+    all_results, all_selected = [], []
+    for city in cities:
         try:
-            results_df, selected_df = run_city(city)
-            all_results.append(results_df)
-            all_selected.append(selected_df)
-            # break  # TEMP: run only the first city for now
+            r, s = run_city(city)
+            all_results.append(r)
+            all_selected.append(s)
         except Exception as e:
             warnings.warn(f"[{city}] failed: {e}")
 
     if all_results:
-        all_results_df = pd.concat(all_results, ignore_index=True)
-        all_results_df.to_csv(
-            OUTPUT_ROOT / "all_cities_candidate_densification_results.csv",
-            index=False,
-            sep=";",
-        )
-
+        pd.concat(all_results, ignore_index=True).to_csv(
+            OUTPUT_ROOT / "all_cities_candidate_densification_results.csv", index=False, sep=";")
     if all_selected:
-        all_selected_df = pd.concat(all_selected, ignore_index=True)
-        all_selected_df.to_csv(
-            OUTPUT_ROOT / "all_cities_selected_favorable_unfavorable_cells.csv",
-            index=False,
-            sep=";",
-        )
+        pd.concat(all_selected, ignore_index=True).to_csv(
+            OUTPUT_ROOT / "all_cities_selected_favorable_unfavorable_cells.csv", index=False, sep=";")
 
-        print("\nSelected favorable/unfavorable cells:")
-        print(
-            all_selected_df[
-                [
-                    "city",
-                    "zone_label",
-                    "scenario_type",
-                    "cell_id",
-                    "selection_ranking_col",
-                    "horizontal_tolerance_used",
-                    "min_selected_distance_used_m",
-                    "horizontal_cost_relative_to_ref_pct",
-                    "total_work_joules",
-                    "vertical_work_joules",
-                    "horizontal_cost_joules",
-                    "vertical_share_pct",
-                    "horizontal_share_pct",
-                    "work_increase_pct",
-                ]
-            ]
-        )
-
-    print("\nDone.")
-    print(f"All files saved to: {OUTPUT_ROOT}")
+    print(f"\nDone. All files saved to: {OUTPUT_ROOT}")
 
 
 if __name__ == "__main__":

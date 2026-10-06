@@ -55,7 +55,9 @@ LAND_DIR     = FIG_DIR / "land_false"
 OVERVIEW_DIR = FIG_DIR / "overview"
 TEX_PATH     = TEX_DIR / "gravitational_morphology_supplementary.tex"
 MIN_TRANSLATION_DISTANCE_M = 200.0
-EXCLUDED_CITIES: set[str] = set()  # all cities with data are included
+EXCLUDED_CITIES: set[str] = {"pekin", "shanghai"}  # geolocated Twitter/X activity in
+# mainland China is dominated by foreign visitors rather than residents (Twitter/X is
+# officially blocked there), so Beijing and Shanghai were removed from the study
 AXIS_LABEL_SIZE = 22
 TICK_LABEL_SIZE = 20
 LEGEND_SIZE = 18
