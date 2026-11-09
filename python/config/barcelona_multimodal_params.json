@@ -1,0 +1,200 @@
+{
+  "_doc": "Parameters for python/barcelona_multimodal_robustness.py. Per-passenger energy of a trip leg of mode m: e = (mass_kg*g*(H_up - regen_eff*H_down) + lambda_J_per_m*L) / occupancy. lambda is the mechanical (at-wheel) horizontal cost per vehicle-metre, same convention as the car model of the paper (lambda = eta * fuel energy per metre). Each numeric parameter is [low, central, high]; the Monte Carlo draws uniformly in [low, high]. Entries whose source starts with PROVISIONAL must be replaced by cited values before the SI is written.",
+  "modal_split": {
+    "source": "EMEF 2025, Resum executiu (ATM / Institut Metropoli), p. 13, table 'Mitja de transport', 2025, thousands of weekday trips, ATM planning area. Active modes, 'Resta transport public' (175.2) and 'Furgoneta, camio i resta privat' (244.9) excluded; shares renormalised over the modes below.",
+    "trips_thousands": {
+      "car": 5710.2,
+      "car_ev": 176.6,
+      "moto": 758.1,
+      "bus": 1361.8,
+      "rail": 2135.5
+    },
+    "rail_note": "rail = Metro (1281.0) + Altres ferroviaris: FGC, Rodalies Renfe, Tramvia (854.5)",
+    "car_split_note": "Car trips (5886.8) split 97% combustion/hybrid/LPG and 3% battery electric, from the propulsion mix of car-driver mobility in EMEF 2025 p. 32 (42.0% diesel, 42.7% petrol, 11% hybrid, 3% electric, 1.1% LPG)."
+  },
+  "modes": {
+    "car": {
+      "mass_kg": [
+        1000,
+        1200,
+        1800
+      ],
+      "lambda_J_per_m": [
+        400,
+        585,
+        800
+      ],
+      "occupancy": [
+        1.19,
+        1.19,
+        1.59
+      ],
+      "regen_eff": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": "Combustion car. mass and lambda: paper baseline (1200 kg; lambda = 0.25 * 36 MJ/L * 6.5 L/100km); range PROVISIONAL. occupancy: EMEF 2025 p. 32 (calculated 1.19, declared 1.59 persons/car)."
+    },
+    "car_ev": {
+      "mass_kg": [
+        1500,
+        1800,
+        2200
+      ],
+      "lambda_J_per_m": [
+        310,
+        460,
+        610
+      ],
+      "occupancy": [
+        1.19,
+        1.19,
+        1.59
+      ],
+      "regen_eff": [
+        0.3,
+        0.5,
+        0.7
+      ],
+      "source": "Battery electric car. regen_eff: 30-70% of braking energy recovered; US DOE fueleconomy.gov (https://fueleconomy.gov/feg/atv-ev.shtml) gives about 32% of the energy returned by regenerative braking in city driving, the lower value. lambda: 0.85 x 10-20 kWh/100 km at the battery, assumed. mass: assumed (EU average mass of all new cars 1540 kg in 2023, ICCT European Vehicle Market Statistics 2024/25; BEVs are heavier). occupancy: EMEF 2025 p. 32."
+    },
+    "moto": {
+      "mass_kg": [
+        170,
+        250,
+        310
+      ],
+      "lambda_J_per_m": [
+        115,
+        190,
+        270
+      ],
+      "occupancy": [
+        1.06,
+        1.06,
+        1.14
+      ],
+      "regen_eff": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "source": "mass incl. rider and lambda (0.20 x 1.8-4.2 L/100 km x 32 MJ/L): WEAK SOURCES (WMTC scooter test at 280-310 kg test mass, 4.0-4.2 L/100 km, French BTS exam material; automatic scooters 96-129 kg, 1.8-2.6 L/100 km, Indonesian on-road study). occupancy: EMEF 2025 p. 32 (calculated 1.06, declared 1.14 persons/moto)."
+    },
+    "bus": {
+      "mass_kg": [
+        12000,
+        15000,
+        19000
+      ],
+      "lambda_J_per_m": [
+        2450,
+        4800,
+        7000
+      ],
+      "occupancy": [
+        10,
+        13.6,
+        18
+      ],
+      "regen_eff": [
+        0.0,
+        0.1,
+        0.4
+      ],
+      "source": "occupancy: TMB Dades basiques 2025 (network data 31.12.2024): 215.31 M bus trips x 2.60 km mean trip / 41,303.55 thousand bus-km = 13.6 passengers per bus-km; range assumed (10-18). lambda: lower bound battery-electric 12 m bus, 0.80 kWh/km (ICCT 2023, Operational analysis of battery electric buses in Sao Paulo, E-SORT: 0.86-1.26 kWh/km; ICCT 2021 model runs 0.80-1.14 kWh/km) x 0.85; upper bound from the TMB 2021 fleet energy use, TMB Memoria de sostenibilitat 2021 (https://www.tmb.cat/documents/20182/111197/Mem%C3%B2ria+de+sostenibilitat+2021+CA/ac4f8238-2fc9-4560-a610-0823b92c6353): 14.298 M L diesel, 11.851 M kg CNG, 1.719 GWh electricity (about 300 GWh at LHV 10.0 kWh/L and 13.1 kWh/kg) over 46.656 M total bus-km (41.937 M service bus-km) = 6.4 kWh per total bus-km (7.2 per service bus-km), x 0.25-0.30 = 5.8-7.7 kJ/m; 7000 J/m kept as upper bound since fleet averages include idling and auxiliaries. Mean diesel use 52.2 L/100 km (same report). Fleet (TMB Dades basiques 2025, 31.12.2024): 620 standard 12 m, 369 articulated 18 m, 60 minibuses, 65 double-deckers; 303 CNG, 197 battery-electric, 417 hybrid, 46 hydrogen. mass: assumed (12 m and 18 m buses with passengers; central 15 t = fleet-weighted mass of these classes). regen_eff: 0 for diesel/CNG, up to 0.4 for hybrid/electric (about 69% of the fleet), assumed."
+    },
+    "metro": {
+      "mass_kg": [
+        150000,
+        180000,
+        210000
+      ],
+      "lambda_J_per_m": [
+        24500,
+        33700,
+        41000
+      ],
+      "occupancy": [
+        90,
+        120,
+        160
+      ],
+      "regen_eff": [
+        0.05,
+        0.25,
+        0.41
+      ],
+      "source": "Five-car 9000-series train (180 five-car and 3 two-car trains, TMB Dades basiques 2025). mass: 157 t per 5-car, 86.1 m train, capacity 679 (AW1) / 960 (AW2) passengers (Alstom, Barcelona Metropolis L-9, Trenes S-9000, ALAMYS Barcelona 2009, https://alamys.org/wp-content/files_mf/14703290691450710442alstom.ppt.pdf); range 150-210 t covers empty to about 700 passengers. occupancy: TMB Dades basiques 2025 (2024): 468.67 M trips x 5.00 km / 97,495.26 thousand car-km = 24.0 passengers per car, x 5 = 120. lambda: traction energy 2.184 kWh per total car-km in 2021 (179.1 GWh, lines L1-L5 and L11; TMB Memoria de sostenibilitat 2021 (https://www.tmb.cat/documents/20182/111197/Mem%C3%B2ria+de+sostenibilitat+2021+CA/ac4f8238-2fc9-4560-a610-0823b92c6353)) x 5 cars x 0.85 = 33.4 kJ/m (central 33.7); upper value 2.68 kWh per car-km including non-traction uses (261 GWh / 97.5 M car-km), lower value 8 kWh/train-km assumed. regen_eff: lower 0.05 = braking energy returned through substation recuperators, about 14 GWh/yr = 5.5% of total network consumption (TMB, reported by Xataka, 25.07.2024, https://www.xataka.com/movilidad/barcelona-apuesta-nueva-forma-alimentar-cargadores-electricos-frenada-metro; excludes reuse by other trains, so a lower value); upper 0.41 = TMB target share of traction energy recovered from braking once all recuperators are installed (TMB Noticies, 31.03.2023, https://noticies.tmb.cat/innovacio/coneix-temps-real-quanta-energia-recupera-metro-ll3). Changed 2026-11-05: regen_eff lower bound 0.10 -> 0.05."
+    },
+    "train": {
+      "mass_kg": [
+        157000,
+        170000,
+        192000
+      ],
+      "lambda_J_per_m": [
+        40000,
+        61000,
+        85000
+      ],
+      "occupancy": [
+        100,
+        200,
+        400
+      ],
+      "regen_eff": [
+        0.1,
+        0.25,
+        0.4
+      ],
+      "source": "mass: Renfe 465 Civia 5-car unit, 156.6 t in running order (listadotren.es) / 157.3 t (fr.wikipedia Renfe serie 465), up to 192 t (Nertus maintenance page; probably loaded). lambda: Spanish conventional network (RFIG) passenger trains 15.9 (2015) and 15.0 (2016) kWh per train-km, Renfe and Adif data in Fundacion de los Ferrocarriles Espanoles, Via Libre, Informe 2018 (https://vialibre-ffe.com/pdf/INFORME_2018_09.pdf), x 0.85 = 46-49 kJ/m, inside the range 40-85 kJ/m (all passenger services; no Rodalies-specific value found). occupancy: assumed (no Rodalies/FGC load data found). regen_eff: Renfe reports energy returned to the grid by regenerative braking in electric Cercanias services of up to 10% (Forbes, 2025) and up to 40% (eseficiencia.es, 27.11.2024, https://www.eseficiencia.es/2024/11/27/grupo-renfe-reduce-emisiones-gracias-medidas-sostenibilidad-eficiencia-energetica); range 0.1-0.4."
+    },
+    "tram": {
+      "mass_kg": [
+        40000,
+        46000,
+        56500
+      ],
+      "lambda_J_per_m": [
+        9000,
+        13000,
+        18000
+      ],
+      "occupancy": [
+        20,
+        30,
+        60
+      ],
+      "regen_eff": [
+        0.1,
+        0.25,
+        0.4
+      ],
+      "source": "mass: Citadis 302 TramBaix/TramBesos, 40 t empty, about 56.5 t loaded at 4 pass/m2 (autobusesbcn.es). occupancy: TRAM Ecocalculadora, 30 passengers per tram on average (sostenible.cat, 06.07.2017, https://www.sostenible.cat/print/article/lecocalculadora-del-tram); range 20-60 assumed. lambda: same source, 0.1665 kWh per km and passenger x 30 = 5.0 kWh per tram-km (operator estimate, at the pantograph) x 0.85 = 15 kJ/m; range 9-18 kJ/m assumed around this value (no measured traction value found). regen_eff: assumed (braking energy is reused by other trams, TRAM). Changed 2026-11-05: occupancy 30-60-120 -> 20-30-60."
+    }
+  },
+  "rail_network": {
+    "source": "OpenStreetMap route relations (ODbL), downloaded via Overpass API; cached in data/data_processed/barcelone/transit/.",
+    "include_networks": [
+      "Metro de Barcelona",
+      "Rodalies de Catalunya",
+      "Metro del Baix Llobregat",
+      "Metro del Valles",
+      "Trambaix",
+      "Trambesos"
+    ],
+    "transfer_max_m": 300,
+    "max_access_m": [
+      1000,
+      1500,
+      2500
+    ],
+    "access_note": "Trips whose origin or destination cell centroid is farther than max_access_m from any rail stop, or whose nearest stops coincide, take the bus instead (rail share reassigned to bus on the road path)."
+  },
+  "monte_carlo": {
+    "n_draws": 2000,
+    "seed": 7
+  }
+}

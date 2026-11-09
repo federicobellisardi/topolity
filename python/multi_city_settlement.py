@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import json
 import pickle
+import sys
 import warnings
 from pathlib import Path
 
@@ -55,6 +56,9 @@ from scipy.spatial.distance import cdist
 from scipy.special import logsumexp
 from shapely.geometry import box
 from tqdm.auto import tqdm
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pipeline_production"))
+from terrain import Z_MIN_VALID_M, clean_elevation_profile  # noqa: E402
 
 
 # =============================================================================
@@ -83,19 +87,16 @@ DISPLAY_NAMES = {
     "bogota": "Bogotá",
 }
 
-DATA_ROOT = Path("/home/fbellisardi/code/topolity/data/data_processed")
-ALT_DATA_ROOT = Path("/home/fbellisardi/code/data/data_processed")
+ROOT = Path(__file__).resolve().parents[1]   # repository root
+DATA_ROOT = ROOT / "data" / "data_processed"
 
-OUTPUT_ROOT = Path("/home/fbellisardi/code/topolity/output/terrain_aware_densification")
+OUTPUT_ROOT = ROOT / "output" / "terrain_aware_densification"
 OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
 
-FUA_GPKG = Path(
-    "/home/fbellisardi/code/data/extra/ghs_fua_v1/"
-    "GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg"
-)
+FUA_GPKG = ROOT / "data" / "extra" / "ghs_fua_v1" / "GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg"
 
 # NOTE: "<iso>_ppp_2020.tif" is the WorldPop *unconstrained* product.
-WORLDPOP_ROOT = Path("/home/fbellisardi/code/topolity/data/worldpop/raw/2020")
+WORLDPOP_ROOT = ROOT / "data" / "worldpop" / "raw" / "2020"
 WORLDPOP_BY_CITY = {
     "milan": "ita_ppp_2020.tif",
     "barcelone": "esp_ppp_2020.tif",
@@ -122,8 +123,7 @@ GRAVITY_DESTINATION_THRESHOLD = 0.0    # 0 = route every destination
 
 # Geometry / terrain
 DS = 10.0                 # sampling step along edges [m]
-DEM_MIN_VALID = -500.0    # anything below is treated as a DEM void
-SRTM_VOID = -32768
+# DEM validity rule shared with the global pipeline: see pipeline_production/terrain.py
 
 # Routing and horizontal cost both use the terrain-following length (Eq. 3)
 ROUTING_WEIGHT = "length_3d"
@@ -152,7 +152,7 @@ ZONE_COLORS = ["#1b9e77", "#7570b3", "#66a61e", "#d95f02", "#e7298a"]
 # CARTO Positron (no labels), as credited in the paper's Data Availability
 # statement. CARTO raster basemaps require an API key passed as ?key=...;
 # without it every tile is watermarked "API KEY REQUIRED".
-CONF_FILE = Path("/home/fbellisardi/code/topolity/conf/conf.json")
+CONF_FILE = ROOT / "conf" / "conf.json"
 CARTO_STYLE = "light_nolabels"
 
 
@@ -199,9 +199,6 @@ LAMBDA_J_PER_M = compute_lambda_from_fuel_params()  # = 585 J/m
 # =============================================================================
 
 def city_base_dir(city: str) -> Path:
-    for root in (DATA_ROOT, ALT_DATA_ROOT):
-        if (root / city).exists():
-            return root / city
     return DATA_ROOT / city
 
 
@@ -318,27 +315,33 @@ def extract_population_to_cells(cells_gdf, worldpop_file: Path, fua_gdf) -> gpd.
 # =============================================================================
 
 class MetricDEM:
-    """DEM reprojected (bilinear) to the metric CRS and sampled bilinearly."""
+    """DEM reprojected (bilinear) to the metric CRS and sampled bilinearly.
+
+    Invalid pixels (< Z_MIN_VALID_M) are masked before reprojection so they do
+    not blend into valid neighbours. The GeoTIFF nodata tag (0) is ignored
+    because 0 m is also the sea-level value in these DEMs.
+    """
 
     def __init__(self, dem_file: Path, metric_crs):
         with rasterio.open(dem_file) as src:
-            src_nodata = src.nodata if src.nodata is not None else SRTM_VOID
+            src_arr = src.read(1, out_dtype="float32")
+            src_arr[~np.isfinite(src_arr) | (src_arr < Z_MIN_VALID_M)] = np.nan
             transform, width, height = calculate_default_transform(
                 src.crs, metric_crs, src.width, src.height, *src.bounds
             )
             arr = np.full((height, width), np.nan, dtype="float32")
             reproject(
-                source=rasterio.band(src, 1),
+                source=src_arr,
                 destination=arr,
                 src_transform=src.transform,
                 src_crs=src.crs,
-                src_nodata=src_nodata,
+                src_nodata=np.nan,
                 dst_transform=transform,
                 dst_crs=metric_crs,
                 dst_nodata=np.nan,
                 resampling=Resampling.bilinear,
             )
-        arr[~np.isfinite(arr) | (arr < DEM_MIN_VALID)] = np.nan
+        arr[~np.isfinite(arr) | (arr < Z_MIN_VALID_M)] = np.nan
         self.arr = arr
         self.inv = ~transform
         print(f"  DEM reprojected: {width}x{height} px, "
@@ -412,12 +415,11 @@ def annotate_edges(G, graph_crs, metric_crs, dem: MetricDEM, ds: float = DS) -> 
         n = max(int(np.ceil(L2 / ds)) + 1, 2)
         s = np.linspace(0.0, L2, n)
         h = dem.sample(np.interp(s, cum, x), np.interp(s, cum, y))
+        if not np.isfinite(h).all():
+            n_void_edges += 1
+        h = clean_elevation_profile(h)
 
         dh = np.diff(h)
-        bad = ~np.isfinite(dh)
-        if bad.any():
-            n_void_edges += 1
-            dh[bad] = 0.0
 
         step = L2 / (n - 1)
         data["length_2d"] = L2

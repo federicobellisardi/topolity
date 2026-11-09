@@ -38,7 +38,7 @@ from matplotlib.ticker import ScalarFormatter
 from shapely.geometry import LineString
 
 
-ROOT = Path("/home/fbellisardi/code/topolity")
+ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT / "data" / "data_processed"
 SUPP_DIR = ROOT / "supplementary"
 PYTHON_DIR = SUPP_DIR / "python"
@@ -54,15 +54,15 @@ PROFILE_DIR  = FIG_DIR / "supporting_profiles"
 LAND_DIR     = FIG_DIR / "land_false"
 OVERVIEW_DIR = FIG_DIR / "overview"
 TEX_PATH     = TEX_DIR / "gravitational_morphology_supplementary.tex"
-MIN_TRANSLATION_DISTANCE_M = 200.0
-EXCLUDED_CITIES: set[str] = {"pekin", "shanghai"}  # geolocated Twitter/X activity in
-# mainland China is dominated by foreign visitors rather than residents (Twitter/X is
-# officially blocked there), so Beijing and Shanghai were removed from the study
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "python"))
+from study_config import (ALT_DEM_CITIES, CONSTRAINED_OVERRIDE, EXCLUDED_CITIES,  # noqa: E402,F401
+                          MIN_TRANSLATION_M as MIN_TRANSLATION_DISTANCE_M, step2_table)
+# EXCLUDED_CITIES (Beijing, Shanghai) comes from python/study_config.py
 AXIS_LABEL_SIZE = 22
 TICK_LABEL_SIZE = 20
 LEGEND_SIZE = 18
 # Cities treated as geographically constrained (excluded from both OK and displaced-lower sections)
-CONSTRAINED_OVERRIDE: set[str] = {"chicago"}
 FEW_POINT_THRESHOLDS = {
     "trans_ns": 2,
     "trans_ew": 2,
@@ -79,7 +79,7 @@ CITY_DISPLAY_NAMES: dict[str, str] = {
     "bangkok": "Bangkok",
     "barcelone": "Barcelona",
     "berlin": "Berlin",
-    "bogota": "Bogota",
+    "bogota": "Bogotá",
     "boston": "Boston",
     "bruxelles": "Brussels",
     "buenosaires": "Buenos Aires",
@@ -120,7 +120,7 @@ CITY_DISPLAY_NAMES: dict[str, str] = {
     "sanfrancisco": "San Francisco",
     "santiago": "Santiago",
     "santodomingo": "Santo Domingo",
-    "saopaulo": "Sao Paulo",
+    "saopaulo": "São Paulo",
     "seoul": "Seoul",
     "shanghai": "Shanghai",
     "singapour": "Singapore",
@@ -365,7 +365,8 @@ def city_dirs() -> list[Path]:
 
 
 def work_csv_path(city: str) -> Path:
-    return DATA_DIR / city / "graphs_fine_grid" / "fine_grid_gravitational_work.csv"
+    """Step-2 table of the paper (3DEP for study_config.ALT_DEM_CITIES once available, else SRTM)."""
+    return step2_table(city)
 
 
 def stats_csv_path(city: str) -> Path:
@@ -585,6 +586,10 @@ def read_work_df(city: str) -> pd.DataFrame:
     )
     is_small_translation = (df["family"] == "translation") & df["parameter"].notna() & (df["parameter"] < MIN_TRANSLATION_DISTANCE_M)
     df = df.loc[~is_small_translation].copy()
+    # Contractions (scale factor < 1, SI Note 8) are not part of the main transformation ensemble.
+    scale = pd.to_numeric(df["filename"].astype(str).str.extract(r"scale_(?:ns|ew)_(\d+p\d+)\.pkl$")[0]
+                          .str.replace("p", "."), errors="coerce")
+    df = df.loc[~(scale < 1.0)].drop_duplicates("filename", keep="last").copy()
     return df
 
 
@@ -651,7 +656,9 @@ def summarize_city(city: str) -> CitySummary | None:
     original_rank = int((df["total_energy_3d_J"] < original_energy).sum()) + 1
     # Treat as OK if the deviation is within numerical precision (< 0.05%)
     # This handles cases like Madrid where delta ~ -0.014% due to rounding.
-    if city in CONSTRAINED_OVERRIDE:
+    # Same rule as python/vehicle_ratio_sweep.classify_city: a city without any admissible alternative
+    # embedding cannot be tested and is reported as constrained, not as supporting.
+    if city in CONSTRAINED_OVERRIDE or int((df["family"] != "original").sum()) == 0:
         status = "CONSTRAINED"
     elif best_row["family"] == "original" or abs(delta_pct) < 0.05:
         status = "OK"
@@ -723,7 +730,7 @@ def save_tables(summary_df: pd.DataFrame, land_df: pd.DataFrame) -> None:
     summary_export = summary_df.copy()
     summary_export["city_display"] = summary_export["city"].map(city_display_name)
     summary_export["status_label"] = summary_export["status"].map(
-        {"OK": "Original minimum", "COUNTEREXAMPLE": "Counterexample"}
+        {"OK": "Original minimum", "DISPLACED_LOWER": "Displaced lower", "CONSTRAINED": "Constrained"}
     )
     summary_export["best_family_label"] = summary_export["best_family"].map(format_family_display)
     summary_export.to_csv(TABLE_DIR / "city_hypothesis_summary.csv", index=False)
@@ -736,9 +743,9 @@ def save_tables(summary_df: pd.DataFrame, land_df: pd.DataFrame) -> None:
     payload = {
         "n_cities_with_work": int(len(summary_df)),
         "n_supporting": int((summary_df["status"] == "OK").sum()),
-        "n_counterexamples": int((summary_df["status"] == "COUNTEREXAMPLE").sum()),
+        "n_counterexamples": int((summary_df["status"] == "DISPLACED_LOWER").sum()),
         "supporting_cities": summary_df.loc[summary_df["status"] == "OK", "city"].sort_values().tolist(),
-        "counterexample_cities": summary_df.loc[summary_df["status"] == "COUNTEREXAMPLE", "city"].sort_values().tolist(),
+        "counterexample_cities": summary_df.loc[summary_df["status"] == "DISPLACED_LOWER", "city"].sort_values().tolist(),
         "counterexample_notes": COUNTEREXAMPLE_NOTES,
     }
     (TABLE_DIR / "summary_payload.json").write_text(json.dumps(payload, indent=2))
@@ -1014,7 +1021,7 @@ def plot_overview_status(summary_df: pd.DataFrame) -> Path:
     df = summary_df.sort_values("delta_pct").copy()
     df["city_label"] = df["city"].map(city_display_name)
     x = np.arange(len(df))
-    counter_mask = df["status"].eq("COUNTEREXAMPLE")
+    counter_mask = df["status"].eq("DISPLACED_LOWER")
     ok_mask = ~counter_mask
 
     ax.bar(x[counter_mask], df.loc[counter_mask, "delta_pct"],
@@ -1047,20 +1054,34 @@ def plot_overview_status(summary_df: pd.DataFrame) -> Path:
     return out
 
 
+def step2_complete(city: str) -> bool:
+    """True when step 2 has a row for every graph of the city (cities still running are excluded)."""
+    graphs = {p.name for p in (DATA_DIR / city / "graphs_fine_grid").glob("graph_*.pkl")}
+    done = set(pd.read_csv(work_csv_path(city), usecols=["filename"])["filename"])
+    return graphs <= done
+
+
 def plot_counterexample_deltas(summary_df: pd.DataFrame) -> Path:
-    """Horizontal bar chart of improvement magnitude for Anomalouscities."""
-    df = summary_df[summary_df["status"] == "COUNTEREXAMPLE"].sort_values("delta_pct").copy()
+    """Horizontal bar chart of the energy reduction of the best displaced embedding (Displaced lower cities)."""
+    df = summary_df[summary_df["status"] == "DISPLACED_LOWER"].copy()
+    incomplete = [c for c in df["city"] if not step2_complete(c)]
+    if incomplete:
+        print_warning_once(f"exception bars: step 2 incomplete, not shown: {', '.join(incomplete)}")
+    df = df[~df["city"].isin(incomplete)].sort_values("delta_pct", ascending=False)
     df["city_label"] = df["city"].map(city_display_name)
-    fig, ax = plt.subplots(figsize=(7, max(3, len(df) * 0.4)))
-    ax.barh(df["city_label"], -df["delta_pct"],
-            color="#2563eb", edgecolor="#1e3a8a", linewidth=0.5)
-    ax.set_xlabel(r"Energy reduction relative to empirical embedding [\%]", fontsize=11)
+    fig, ax = plt.subplots(figsize=(6, max(2.2, len(df) * 0.55)))
+    red = -df["delta_pct"].to_numpy()
+    ax.barh(df["city_label"], red, color="#2563eb", edgecolor="#1e3a8a", linewidth=0.5, height=0.6)
+    for y, v in enumerate(red):
+        ax.text(v + 0.05, y, f"{v:.2f}%", va="center", ha="left", fontsize=10, color="#1e3a8a")
+    ax.set_xlim(0, red.max() * 1.18)
+    ax.set_xlabel("Energy reduction relative to the observed embedding (%)", fontsize=11)
     ax.tick_params(axis="both", labelsize=10)
+    ax.grid(False)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
-    ax.spines["left"].set_linewidth(0.8)
-    ax.spines["bottom"].set_linewidth(0.8)
     plt.tight_layout()
+    OVERVIEW_DIR.mkdir(parents=True, exist_ok=True)
     out = OVERVIEW_DIR / "counterexample_improvement.png"
     fig.savefig(out, bbox_inches="tight")
     fig.savefig(out.with_suffix(".pdf"), bbox_inches="tight")
@@ -1198,6 +1219,17 @@ def _infer_zoom(ax: plt.Axes) -> int:
     return 12
 
 
+def carto_positron_source() -> str:
+    """CARTO Positron tiles with the project API key (conf/conf.json); without a key the tiles are watermarked."""
+    url = "https://basemaps.cartocdn.com/rastertiles/light_all/{z}/{x}/{y}.png"
+    try:
+        key = json.loads((ROOT / "conf" / "conf.json").read_text())["api_keys"]["carto"]
+    except (FileNotFoundError, KeyError, json.JSONDecodeError):
+        print("[basemap] CARTO API key not found in conf/conf.json; tiles will be watermarked.")
+        return url
+    return f"{url}?key={key}"
+
+
 def try_add_basemap(ax: plt.Axes) -> bool:
     if os.environ.get("SUPP_DISABLE_BASEMAP", "").lower() in {"1", "true", "yes"}:
         return False
@@ -1207,7 +1239,8 @@ def try_add_basemap(ax: plt.Axes) -> bool:
             ctx.add_basemap(
                 ax,
                 crs="EPSG:4326",
-                source=ctx.providers.CartoDB.Positron,
+                source=carto_positron_source(),
+                attribution="(C) OpenStreetMap contributors (C) CARTO",
                 attribution_size=6,
                 zoom=attempt_zoom,
             )
@@ -1630,7 +1663,7 @@ def render_tex(
     land_figs: tuple[Path, Path],
 ) -> None:
     n_supporting = int((summary_df["status"] == "OK").sum())
-    n_counter = int((summary_df["status"] == "COUNTEREXAMPLE").sum())
+    n_counter = int((summary_df["status"] == "DISPLACED_LOWER").sum())
     n_with_land_false = int((land_df["n_land_false"] > 0).sum())
     supporting_city_list = ", ".join(
         [city_display_name(city) for city in summary_df.loc[summary_df["status"] == "OK", "city"].sort_values().tolist()]
@@ -1669,14 +1702,14 @@ def render_tex(
     supporting_section_text = "".join(supporting_section)
 
     counter_rows = []
-    for row in summary_df[summary_df["status"] == "COUNTEREXAMPLE"].sort_values("city").itertuples(index=False):
+    for row in summary_df[summary_df["status"] == "DISPLACED_LOWER"].sort_values("city").itertuples(index=False):
         counter_rows.append(
             f"{tex_escape(city_display_name(row.city))} & {tex_escape(row.best_family.title())} & {format_plain_number(row.best_parameter, decimals=2)} & {row.delta_pct:.2f} \\\\"
         )
     counter_rows_text = "\n".join(counter_rows)
 
     counter_notes_blocks = []
-    for row in summary_df[summary_df["status"] == "COUNTEREXAMPLE"].sort_values("city").itertuples(index=False):
+    for row in summary_df[summary_df["status"] == "DISPLACED_LOWER"].sort_values("city").itertuples(index=False):
         note = COUNTEREXAMPLE_NOTES.get(row.city, {})
         work_df = read_work_df(row.city)
         stats_df = read_stats_df(row.city)
@@ -1994,7 +2027,7 @@ def main() -> None:
     print(f"Summary table CSV: {TABLE_DIR / 'city_hypothesis_summary.csv'}")
     print(f"Saved figures to: {FIG_DIR}")
     print(f"Supporting cities: {int((summary_df['status'] == 'OK').sum())}")
-    print(f"Counterexamples: {int((summary_df['status'] == 'COUNTEREXAMPLE').sum())}")
+    print(f"Counterexamples: {int((summary_df['status'] == 'DISPLACED_LOWER').sum())}")
     print(f"Cities with land/sea rejected transformations: {int((land_df['n_land_false'] > 0).sum())}")
 
 

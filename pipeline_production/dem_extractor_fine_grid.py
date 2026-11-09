@@ -9,7 +9,6 @@ import osmnx as ox
 import pandas as pd
 import geopandas as gpd
 from shapely.geometry import Point, Polygon
-from shapely.affinity import translate as shapely_translate, rotate as shapely_rotate, scale as shapely_scale
 import json
 import multiprocessing as mp
 import numpy as np
@@ -27,11 +26,12 @@ plt.rcParams.update({'font.size': 22})
 from shapely.wkt import loads as load_wkt
 from data_processing import DEMReader
 from utils import logger
+from terrain import MetricFrame, translation_fn, rotation_fn, scaling_fn
 
 import time
 
 VARIANT_COUNT = 0
-ROOT = "/home/fbellisardi/code/topolity"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # repository root
 DEFAULT_DATA_ROOT = os.path.join(ROOT, "data", "data_processed")
 
 _G = None
@@ -436,62 +436,38 @@ def _apply_geom_transform(G, fn):
         d["geometry"] = ng
 
 
-def translate_graph(G, offset):
-    ox, oy = float(offset[0]), float(offset[1])
+def _transform_graph(G, fn, frame=None):
+    """Apply a metric transformation `fn(x_m, y_m)` to nodes and edge geometries.
+
+    Coordinates are projected to a local AEQD frame (default: centred on the
+    node bounding box), transformed in metres and mapped back to lon/lat, so
+    rigid motions preserve internal distances.
+    """
+    frame = frame if frame is not None else MetricFrame.from_graph(G)
     nodes, data = zip(*G.nodes(data=True))
     n = len(nodes)
     xs = np.fromiter((d['x'] for d in data), float, count=n)
     ys = np.fromiter((d['y'] for d in data), float, count=n)
-    xs += ox; ys += oy
-    nx.set_node_attributes(G, {nd: {'x': float(x), 'y': float(y)}
-                                for nd, x, y in zip(nodes, xs, ys)})
-    _apply_geom_transform(G, lambda c: c + np.array([ox, oy]))
-    return G
-
-
-def rotate_graph(G, angle_deg, origin=None):
-    nodes, data = zip(*G.nodes(data=True))
-    n = len(nodes)
-    xs = np.fromiter((d['x'] for d in data), float, count=n)
-    ys = np.fromiter((d['y'] for d in data), float, count=n)
-    x0, y0 = (origin if origin is not None
-               else ((xs.max() + xs.min()) / 2, (ys.max() + ys.min()) / 2))
-    theta = angle_deg * np.pi / 180.0
-    c, s = np.cos(theta), np.sin(theta)
-    dx, dy = xs - x0, ys - y0
-    xr = c * dx - s * dy + x0
-    yr = s * dx + c * dy + y0
+    xr, yr = frame.apply(xs, ys, fn)
     nx.set_node_attributes(G, {nd: {'x': float(x), 'y': float(y)}
                                 for nd, x, y in zip(nodes, xr, yr)})
-
-    def _rot(coords):
-        dx2 = coords[:, 0] - x0; dy2 = coords[:, 1] - y0
-        return np.column_stack([c * dx2 - s * dy2 + x0, s * dx2 + c * dy2 + y0])
-
-    _apply_geom_transform(G, _rot)
+    _apply_geom_transform(G, lambda c: np.column_stack(frame.apply(c[:, 0], c[:, 1], fn)))
     return G
 
 
-def scale_graph(G, scale_factor, axis='both', origin=None):
-    nodes, data = zip(*G.nodes(data=True))
-    n = len(nodes)
-    xs = np.fromiter((d['x'] for d in data), float, count=n)
-    ys = np.fromiter((d['y'] for d in data), float, count=n)
-    x0, y0 = (origin if origin is not None
-               else ((xs.max() + xs.min()) / 2, (ys.max() + ys.min()) / 2))
-    xr = x0 + scale_factor * (xs - x0) if axis in ('x', 'both') else xs.copy()
-    yr = y0 + scale_factor * (ys - y0) if axis in ('y', 'both') else ys.copy()
-    nx.set_node_attributes(G, {nd: {'x': float(x), 'y': float(y)}
-                                for nd, x, y in zip(nodes, xr, yr)})
-    xfact = float(scale_factor) if axis in ('x', 'both') else 1.0
-    yfact = float(scale_factor) if axis in ('y', 'both') else 1.0
+def translate_graph(G, offset_m, frame=None):
+    """Translate by (dx, dy) metres (East, North)."""
+    return _transform_graph(G, translation_fn(float(offset_m[0]), float(offset_m[1])), frame)
 
-    def _scl(coords):
-        return np.column_stack([x0 + xfact * (coords[:, 0] - x0),
-                                y0 + yfact * (coords[:, 1] - y0)])
 
-    _apply_geom_transform(G, _scl)
-    return G
+def rotate_graph(G, angle_deg, frame=None):
+    """Rotate counter-clockwise by `angle_deg` about the frame centre."""
+    return _transform_graph(G, rotation_fn(angle_deg), frame)
+
+
+def scale_graph(G, scale_factor, axis='both', frame=None):
+    """Scale about the frame centre; axis 'x' = E-W, 'y' = N-S."""
+    return _transform_graph(G, scaling_fn(float(scale_factor), axis), frame)
 
 def _metric_transformer_from_graph(G):
     xs = [float(data['x']) for _, data in G.nodes(data=True)]
@@ -623,14 +599,33 @@ def sample_graph_nodes(graph, max_samples=25):
     
     return sample_nodes
 
-def generate_fine_grid_offsets(step_meters=50, num_points=10, lat_ref=41.0, land_mask=None,
-                               graph_bounds=None, seed=None, boundary_polygon=None, graph=None,
+def _land_check_sample(graph):
+    """(xs, ys) of the originally-on-land nodes used by the generation pre-filter."""
+    sxs, sys_ = _sample_on_land_nodes()
+    if sxs is None:
+        sample_nodes = sample_graph_nodes(graph)
+        sxs = np.fromiter((d['x'] for _, d in sample_nodes), float)
+        sys_ = np.fromiter((d['y'] for _, d in sample_nodes), float)
+    return sxs, sys_
+
+
+def _polygon_on_land(boundary_polygon, frame, fn, safe_land):
+    """Fallback check when no graph is available: transform the boundary polygon."""
+    import shapely as _shp
+    moved = _shp.transform(boundary_polygon,
+                           lambda c: np.column_stack(frame.apply(c[:, 0], c[:, 1], fn)))
+    return safe_land.covers(moved)
+
+
+def generate_fine_grid_offsets(step_meters=50, num_points=10, land_mask=None,
+                               seed=None, boundary_polygon=None, graph=None,
                                extra_angles=None, safe_land=None):
     """Generate translation offsets in admissible directions (on land).
 
-    Tests cardinal directions (N/S/E/W) plus any additional angles supplied via
-    `extra_angles` (e.g. [30, 45, 135]) and keeps those that keep every sampled
-    graph node on land.
+    Offsets are (dx, dy) in metres in the local metric frame of the graph
+    (see terrain.MetricFrame). Tests cardinal directions (N/S/E/W) plus any
+    additional angles supplied via `extra_angles` (e.g. [30, 45, 135]) and keeps
+    those that keep every sampled graph node on land.
 
     Parameters
     ----------
@@ -644,20 +639,14 @@ def generate_fine_grid_offsets(step_meters=50, num_points=10, lat_ref=41.0, land
     if seed is not None:
         np.random.seed(seed)
 
-    meters_per_deg_lat = 111000.0
-    meters_per_deg_lon = 111000.0 * np.cos(np.radians(lat_ref))
-    step_deg_lon = step_meters / meters_per_deg_lon
-    step_deg_lat = step_meters / meters_per_deg_lat
-
     offsets = [((0.0, 0.0), 0.0)]
 
-    if land_mask is None or boundary_polygon is None or graph_bounds is None:
+    if land_mask is None or (boundary_polygon is None and graph is None):
         logger.warning("Missing land_mask or boundary_polygon; using cardinal directions only")
         for i in range(1, num_points + 1):
-            offsets.append(((i * step_deg_lon,  0.0), 0.0))
-            offsets.append(((-i * step_deg_lon, 0.0), 180.0))
-            offsets.append(((0.0,  i * step_deg_lat), 90.0))
-            offsets.append(((0.0, -i * step_deg_lat), 270.0))
+            d = i * step_meters
+            offsets.extend([((d, 0.0), 0.0), ((-d, 0.0), 180.0),
+                            ((0.0, d), 90.0), ((0.0, -d), 270.0)])
         return offsets
 
     # Pre-compute safe_land once (expensive buffer operation)
@@ -666,30 +655,25 @@ def generate_fine_grid_offsets(step_meters=50, num_points=10, lat_ref=41.0, land
 
     all_angles = sorted(set([0, 90, 180, 270] + list(extra_angles or [])))
 
-    # Use pre-filtered on-land node coordinates (excludes bridges/waterfront).
-    # Representative sample: boundary nodes + random pool (see _sample_on_land_nodes).
-    node_xs = node_ys = None
     if graph is not None:
-        node_xs, node_ys = _sample_on_land_nodes()
-        if node_xs is None:
-            sample_nodes = sample_graph_nodes(graph)
-            node_xs = np.fromiter((d["x"] for _, d in sample_nodes), dtype=float, count=len(sample_nodes))
-            node_ys = np.fromiter((d["y"] for _, d in sample_nodes), dtype=float, count=len(sample_nodes))
+        frame = MetricFrame.from_graph(graph)
+        node_xs, node_ys = _land_check_sample(graph)
+    else:
+        c = boundary_polygon.centroid
+        frame = MetricFrame(c.x, c.y)
 
     for i in range(1, num_points + 1):
         admissible_offsets = []
 
         for angle_deg in all_angles:
             angle_rad = np.radians(angle_deg)
-            ox = i * step_deg_lon * np.cos(angle_rad)
-            oy = i * step_deg_lat * np.sin(angle_rad)
-            offset = (ox, oy)
+            offset = (i * step_meters * np.cos(angle_rad), i * step_meters * np.sin(angle_rad))
+            fn = translation_fn(*offset)
 
             if graph is not None:
-                on_land = _points_in_geom(safe_land, node_xs + ox, node_ys + oy)
+                on_land = _points_in_geom(safe_land, *frame.apply(node_xs, node_ys, fn))
             else:
-                translated = shapely_translate(boundary_polygon, xoff=ox, yoff=oy)
-                on_land = safe_land.covers(translated)
+                on_land = _polygon_on_land(boundary_polygon, frame, fn, safe_land)
 
             if on_land:
                 admissible_offsets.append((offset, float(angle_deg)))
@@ -708,7 +692,11 @@ def generate_fine_grid_offsets(step_meters=50, num_points=10, lat_ref=41.0, land
 
 def generate_fine_rotations(angles_deg, boundary_polygon=None, land_mask=None, graph=None,
                             safe_land=None):
-    """Filter rotation angles that keep sampled graph nodes on land (vectorised)."""
+    """Filter rotation angles that keep sampled graph nodes on land (vectorised).
+
+    The pivot is the same frame centre used by rotate_graph, so the pre-filter
+    tests exactly the transformation that is later applied.
+    """
     if land_mask is None or (boundary_polygon is None and graph is None):
         return sorted(set(angles_deg))
 
@@ -716,19 +704,11 @@ def generate_fine_rotations(angles_deg, boundary_polygon=None, land_mask=None, g
         safe_land = land_mask.buffer(1e-5)
 
     if graph is not None:
-        # Boundary-aware sample (see _sample_on_land_nodes)
-        sxs, sys_ = _sample_on_land_nodes()
-        if sxs is None:
-            all_nodes = list(graph.nodes(data=True))
-            sxs = np.fromiter((d['x'] for _, d in sample_graph_nodes(graph)), float)
-            sys_ = np.fromiter((d['y'] for _, d in sample_graph_nodes(graph)), float)
-        all_xs = _ORIG_LAND_XS if _ORIG_LAND_XS is not None else sxs
-        all_ys = _ORIG_LAND_YS if _ORIG_LAND_YS is not None else sys_
-        origin_x = (all_xs.min() + all_xs.max()) / 2
-        origin_y = (all_ys.min() + all_ys.max()) / 2
+        frame = MetricFrame.from_graph(graph)
+        sxs, sys_ = _land_check_sample(graph)
     else:
-        centroid = boundary_polygon.centroid
-        origin_x, origin_y = centroid.x, centroid.y
+        c = boundary_polygon.centroid
+        frame = MetricFrame(c.x, c.y)
 
     admissible_angles = []
     for angle in sorted(set(angles_deg)):
@@ -736,16 +716,11 @@ def generate_fine_rotations(angles_deg, boundary_polygon=None, land_mask=None, g
             admissible_angles.append(angle)
             continue
 
+        fn = rotation_fn(angle)
         if graph is not None:
-            theta = np.radians(angle)
-            c, s_a = np.cos(theta), np.sin(theta)
-            dx, dy = sxs - origin_x, sys_ - origin_y
-            rx = c * dx - s_a * dy + origin_x
-            ry = s_a * dx + c * dy + origin_y
-            on_land = _points_in_geom(safe_land, rx, ry)
+            on_land = _points_in_geom(safe_land, *frame.apply(sxs, sys_, fn))
         else:
-            rotated = shapely_rotate(boundary_polygon, angle, origin=(origin_x, origin_y))
-            on_land = rotated.within(land_mask)
+            on_land = _polygon_on_land(boundary_polygon, frame, fn, safe_land)
 
         if on_land:
             admissible_angles.append(angle)
@@ -767,16 +742,8 @@ def generate_fine_scales(scale_factors, axis, land_mask=None, graph=None, safe_l
     if safe_land is None:
         safe_land = land_mask.buffer(1e-5)
 
-    # Boundary-aware sample (see _sample_on_land_nodes)
-    sxs, sys_ = _sample_on_land_nodes()
-    if sxs is None:
-        sample_nodes = sample_graph_nodes(graph)
-        sxs = np.fromiter((d['x'] for _, d in sample_nodes), float)
-        sys_ = np.fromiter((d['y'] for _, d in sample_nodes), float)
-    all_xs = _ORIG_LAND_XS if _ORIG_LAND_XS is not None else sxs
-    all_ys = _ORIG_LAND_YS if _ORIG_LAND_YS is not None else sys_
-    origin_x = (all_xs.min() + all_xs.max()) / 2
-    origin_y = (all_ys.min() + all_ys.max()) / 2
+    frame = MetricFrame.from_graph(graph)
+    sxs, sys_ = _land_check_sample(graph)
 
     admissible = []
     for scale in unique_scales:
@@ -784,15 +751,7 @@ def generate_fine_scales(scale_factors, axis, land_mask=None, graph=None, safe_l
             logger.warning(f"Scale factor {scale} rejected: must be > 0")
             continue
 
-        dx, dy = sxs - origin_x, sys_ - origin_y
-        if axis == 'x':
-            tx, ty = origin_x + scale * dx, sys_
-        elif axis == 'y':
-            tx, ty = sxs, origin_y + scale * dy
-        else:
-            tx, ty = origin_x + scale * dx, origin_y + scale * dy
-
-        if _points_in_geom(safe_land, tx, ty):
+        if _points_in_geom(safe_land, *frame.apply(sxs, sys_, scaling_fn(scale, axis))):
             admissible.append(scale)
         else:
             logger.info(f"Scale {scale:.3f} on axis {axis} rejected: some nodes would be in water")
@@ -891,7 +850,7 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
     fine_grid_dir = os.path.join(folder_path, f'graphs_fine_grid{_sfx}')
     os.makedirs(fine_grid_dir, exist_ok=True)
 
-    json_bbox = "/data/workspaces/fbellisardi/metropolis.json"
+    json_bbox = os.path.join(ROOT, "data", "metropolis.json")
     dem_dir = os.path.join(folder_path, 'dem')
     dem_file = os.path.join(dem_dir, f"{folder}_dem.tif")
     stats_file = os.path.join(fine_grid_dir, 'fine_grid_stats.csv')
@@ -947,13 +906,11 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
 
     elif use_fua:
         # GHSL FUA polygon
-        default_fua = "/home/fbellisardi/code/topolity/vars/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg"
+        default_fua = os.path.join(ROOT, "vars", "GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0", "GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg")
         fua_gpkg = fua_path or (default_fua if os.path.exists(default_fua) else None)
         if fua_gpkg is None:
             alt_paths = [
-                "/home/fbellisardi/code/topolity/data/extra/ghs_fua_v1/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg",
-                "/home/fbellisardi/code/data/extra/ghs_fua_v1/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg",
-                "/home/fbellisardi/code/twitter/extra/ghs_fua_v1/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg",
+                os.path.join(ROOT, "data", "extra", "ghs_fua_v1", "GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg"),
             ]
             for p in alt_paths:
                 if os.path.exists(p):
@@ -1052,7 +1009,7 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
     _DEM_TREE, _DEM_ALTS = dem_tree, dem_alts
     _DEM_SRC, _DEM_TRANSFORMER = dem_src_main, dem_transformer_main
     
-    raw_dir = "/data/workspaces/fbellisardi/land"
+    raw_dir = os.path.join(ROOT, "data", "land")
     shp_file = os.path.join(raw_dir, "ne_10m_land.shp")
     land_global = gpd.read_file(shp_file).to_crs("EPSG:4326")
     # NOTE: do NOT union_all() the global land here.  It is only needed for the
@@ -1284,8 +1241,6 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
             f"[{folder}] {n_water_nodes} original nodes in water body (bridges/waterfront) — "
             f"excluded from land checks; only {len(_land_node_ids):,} on-land nodes checked."
         )
-    graph_bounds = (float(_all_xs.min()), float(_all_ys.min()),
-                    float(_all_xs.max()), float(_all_ys.max()))
 
     # !! Set on-land globals NOW — generation functions read them immediately below.
     # (The full globals block at the bottom of process_folder also sets _G, _LAND_MASK
@@ -1296,8 +1251,8 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
     _ORIG_LAND_YS       = _land_ys
 
     # Generate fine-grid offsets (cardinal + extra_translation_angles, vectorised land checks)
-    offsets = generate_fine_grid_offsets(step_meters, num_points, lat_ref=center_y,
-                                         land_mask=land_mask, graph_bounds=graph_bounds, seed=seed,
+    offsets = generate_fine_grid_offsets(step_meters, num_points,
+                                         land_mask=land_mask, seed=seed,
                                          boundary_polygon=poly_for_graph, graph=G,
                                          extra_angles=extra_translation_angles, safe_land=safe_land)
     rotations = generate_fine_rotations(rotation_angles, boundary_polygon=poly_for_graph,
@@ -1321,24 +1276,21 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
     variants.append({
         'variant': 'original',
         'type': 'original',
-        'offset_x': 0.0,
-        'offset_y': 0.0,
+        'offset_x_m': 0.0,
+        'offset_y_m': 0.0,
         'angle_deg': 0.0
     })
     
     # Add translations
     for idx, ((dx, dy), angle_deg) in enumerate(offsets[1:], start=1):
-        # Calculate distance
-        distance_x_m = abs(dx) * 111000 * np.cos(np.radians(center_y))
-        distance_y_m = abs(dy) * 111000
-        distance_m = int(np.sqrt(distance_x_m**2 + distance_y_m**2))
+        distance_m = int(round(np.hypot(dx, dy)))
         
         variants.append({
             'variant': f'trans_{distance_m}m_a{int(angle_deg):+04d}',
             'type': 'translate',
             'offset': (dx, dy),
-            'offset_x': dx,
-            'offset_y': dy,
+            'offset_x_m': dx,
+            'offset_y_m': dy,
             'angle_deg': 0.0,
             'translation_angle': angle_deg,
             'translation_distance_m': distance_m
@@ -1352,8 +1304,8 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
             'variant': f'rot_{angle:+.2f}deg'.replace('.', 'p'),
             'type': 'rotate',
             'angle_deg': angle,
-            'offset_x': 0.0,
-            'offset_y': 0.0
+            'offset_x_m': 0.0,
+            'offset_y_m': 0.0
         })
 
     # Add anisotropic scales (dilations)
@@ -1365,8 +1317,8 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
             'type': 'scale',
             'scale_factor': float(scale),
             'scale_axis': 'y',
-            'offset_x': 0.0,
-            'offset_y': 0.0,
+            'offset_x_m': 0.0,
+            'offset_y_m': 0.0,
             'angle_deg': 0.0
         })
     for scale in ew_scales:
@@ -1377,8 +1329,8 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
             'type': 'scale',
             'scale_factor': float(scale),
             'scale_axis': 'x',
-            'offset_x': 0.0,
-            'offset_y': 0.0,
+            'offset_x_m': 0.0,
+            'offset_y_m': 0.0,
             'angle_deg': 0.0
         })
 
@@ -1436,7 +1388,7 @@ def process_folder(folder, base_path, step_meters, num_points, rotation_angles,
     cmap_N = len(variants)
 
     fieldnames = [
-        'variant', 'type', 'offset_x', 'offset_y', 'angle_deg',
+        'variant', 'type', 'offset_x_m', 'offset_y_m', 'angle_deg',
         'translation_angle', 'translation_distance_m',
         'scale_factor', 'scale_axis',
         'num_nodes', 'num_edges', 'z_mean', 'z_min', 'z_max',
@@ -1549,8 +1501,8 @@ def process_variant(args):
             return {
                 'variant': variant,
                 'type': meta['type'],
-                'offset_x': meta.get('offset_x', 0.0),
-                'offset_y': meta.get('offset_y', 0.0),
+                'offset_x_m': meta.get('offset_x_m', 0.0),
+                'offset_y_m': meta.get('offset_y_m', 0.0),
                 'angle_deg': meta.get('angle_deg', 0.0),
                 'translation_angle': meta.get('translation_angle', 0.0),
                 'translation_distance_m': meta.get('translation_distance_m', 0),
@@ -1584,8 +1536,8 @@ def process_variant(args):
     stats = compute_graph_statistics(G_var)
     stats['variant'] = variant
     stats['type'] = meta['type']
-    stats['offset_x'] = meta.get('offset_x', 0.0)
-    stats['offset_y'] = meta.get('offset_y', 0.0)
+    stats['offset_x_m'] = meta.get('offset_x_m', 0.0)
+    stats['offset_y_m'] = meta.get('offset_y_m', 0.0)
     stats['angle_deg'] = meta.get('angle_deg', 0.0)
     stats['translation_angle'] = meta.get('translation_angle', 0.0)
     stats['translation_distance_m'] = meta.get('translation_distance_m', 0)
@@ -1603,11 +1555,15 @@ def main(api_key=None, example_city=None, cities=None, step_meters=50, num_point
          workers=None, seed=None, use_fua=False, fua_path=None, resume=False,
          base_path=None, low_memory=False, land_check='sample', dem_mode='tree',
          extra_translation_angles=None, polygon_source='fua'):
-    config_path = "/home/fbellisardi/code/topolity/tools/conf/conf_extractor.json"
-    with open(config_path, 'r') as f:
-        config = json.load(f)
+    # Optional local configuration (not versioned); the OpenTopography key can also be
+    # given with --api_key or the OPENTOPOGRAPHY_API_KEY environment variable.
+    config_path = os.path.join(ROOT, "tools", "conf", "conf_extractor.json")
+    config = {}
+    if os.path.exists(config_path):
+        with open(config_path, 'r') as f:
+            config = json.load(f)
 
-    api_key = api_key or config.get("api_key")
+    api_key = api_key or os.environ.get("OPENTOPOGRAPHY_API_KEY") or config.get("api_key")
     example_city = example_city or config.get("city")
     base_path = base_path or DEFAULT_DATA_ROOT
     rotation_angles = normalize_rotation_angles(rotation_angles or [0.0])

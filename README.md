@@ -1,77 +1,65 @@
 # Topolity
 
-Code for the paper *"Mobility energetic balance frames spatial configuration of cities"* (Bellisardi et al.).
+Code for the paper *"Mobility energetic balance frames spatial configuration of cities"* (Bellisardi,
+Cano Suñén, Ruiz-Varona and Ramasco).
 
-The core hypothesis is that real cities tend to minimize the total gravitational work required for mobility: the original street network embedding sits at — or very close to — the energy minimum among all rigid translations, rotations, and scalings of the same graph.
+For each city, the observed road network is compared with translated, rotated and rescaled copies of itself
+on the same terrain, under the same origin–destination demand. The comparison uses a simplified measure of
+movement energy with a horizontal (route length) and an altitudinal (uphill gain) component.
+
+`README_REPRODUCE.md` lists, for every result of the paper, the script that produces it.
 
 ## Repository structure
 
 ```
-pipeline_scripts/       legacy pipeline scripts (exploration)
-pipeline_production/    production pipeline used for the paper results
-python/                 analysis and figure scripts
+pipeline_production/    steps 1 and 2 of the pipeline (graphs and transformed embeddings; energies) and
+                        the Slurm scripts used to run them on a cluster
+python/                 all-city analyses, densification, transport-mode test (SI Note 9), figures, tests
+python/config/          vehicle and modal-split parameters with their sources (Barcelona, Madrid)
+supplementary/python/   builder of the Supplementary tables and figures
+tools/python/           input preparation (FUA boxes, OD matrices)
 notebooks/              exploratory notebooks
-tools/                  utilities (bbox extraction, map rendering)
 ```
 
-## Pipeline overview
+Study-wide rules (excluded cities, transformation ensemble, tie rule, elevation model per city) are defined
+once in `python/study_config.py`.
 
-The analysis runs in two steps per city:
+## Pipeline
 
-**Step 1 — graph generation** (`pipeline_production/dem_extractor_fine_grid.py`)
+**Step 1** (`pipeline_production/dem_extractor_fine_grid.py`): road network of the functional urban area,
+transformed embeddings in a local metric frame, land check of every node, elevations sampled every 10 m.
 
-Downloads the OSM street network, generates transformed variants (translations, rotations, NS/EW scalings), assigns DEM elevation to each node, and flags sea-covered cells.
-
-**Step 2 — energy computation** (`pipeline_production/fine_grid_gravitational_work.py`)
-
-For each graph variant computes the OD-weighted gravitational work along shortest paths, using the population grid and a gravity model for trip distribution.
-
-**Post-processing** (`pipeline_production/generate_combined_work_figures.py`, `python/exception_analysis.py`)
-
-Aggregates results, identifies counterexamples, and generates paper figures.
-
-## Quickstart
+**Step 2** (`pipeline_production/fine_grid_gravitational_work.py`): OD-weighted energy on shortest paths
+for every embedding, with origins and destinations drawn within cells (five seeded realisations).
 
 ```bash
-conda activate geo_flow
-
-# single city, step 1
-python pipeline_production/dem_extractor_fine_grid.py \
-    --city santiago --step-meters 500 --num-points 5 \
-    --rotation-angles -20 -15 -10 -5 5 10 15 20 \
-    --workers 4 --seed 42 --use-fua --land-check full --resume
-
-# single city, step 2
-python pipeline_production/fine_grid_gravitational_work.py \
-    --city santiago --workers 4 --resume
-
-# all cities (cluster)
-bash pipeline_production/runlog_step1_all_cities.sh
-bash pipeline_production/runlog_step2_all_cities.sh
+python pipeline_production/dem_extractor_fine_grid.py --city santiago --step-meters 250 --num-points 10 \
+    --rotation-angles -40 -30 -20 -15 -10 -5 -1 1 5 10 15 20 30 40 --use-fua --land-check full --resume
+python pipeline_production/fine_grid_gravitational_work.py --city santiago --resume
 ```
 
-## Dependencies
+## Environment and tests
 
 ```bash
-pip install -r requirements.txt
+conda env create -f environment.yml          # locked versions in requirements-lock.txt
+conda activate topolity
+export PYTHONNOUSERSITE=1
+python -m pytest -q python/tests
+(cd pipeline_production && python -m pytest -q tests)
 ```
-
-Main dependencies: `osmnx`, `networkx`, `networkit`, `geopandas`, `rasterio`, `pandas`, `numpy`, `matplotlib`, `seaborn`, `scipy`, `tqdm`.
 
 ## Data
 
-Raw data (OSM graphs, DEM files, WorldPop rasters, OD matrices) are stored outside the repository under `data/data_processed/<city>/` and are not version-controlled.
+Inputs are read from `data/` at the repository root (not versioned; a symbolic link is fine). Road
+networks (OpenStreetMap), elevation models (SRTM, USGS 3DEP), population (WorldPop), functional urban areas
+(GHSL) and the mobility data of the Spanish Ministry of Transport are public. The origin–destination
+matrices derived from geolocated records were obtained under a data-sharing agreement and cannot be
+redistributed; aggregated matrices and the result tables are available from the authors on request.
 
-## Analysis scripts
+Step 1 downloads missing SRTM tiles from OpenTopography; set your own key with
+`export OPENTOPOGRAPHY_API_KEY=...` or `--api_key`. Keys and local settings are never versioned
+(`conf/`, `tools/conf/`, `pipeline_production/local.env`).
 
-| Script | Description |
-|--------|-------------|
-| `python/exception_analysis.py` | Identify cities where a lower-energy variant exists |
-| `python/lower_energy.py` | Detailed analysis of counterexample cities |
-| `python/world_cities_map.py` | World map figure for the paper |
-| `python/multi_city_settlement.py` | Terrain-aware densification analysis across cities |
-| `python/comparative_settlement_analysis.py` | Single-city settlement comparison |
+## Contact
 
-## Authors
-
-Federico Bellisardi — bellisardi@gmail.com - fbellisardi@ifisc.uib-csic.es
+Federico Bellisardi — fbellisardi@ifisc.uib-csic.es

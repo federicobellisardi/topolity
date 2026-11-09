@@ -1,0 +1,13 @@
+# Reproducible environment of the round-2 revision.
+#   conda env create -f environment.yml
+#   conda activate topolity
+# Conda provides only the interpreter; every Python package is pinned in requirements-lock.txt
+# (exact versions used to produce the results; binary wheels from PyPI include GDAL/PROJ).
+name: topolity
+channels:
+  - conda-forge
+dependencies:
+  - python=3.13.2
+  - pip
+  - pip:
+      - -r requirements-lock.txt

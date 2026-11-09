@@ -42,12 +42,14 @@ logs/
 _logs/
 vars/
 tools/conf/
+tools/conf.json
 
 # Project-specific generated / transient folders
 python/logs/
 notebooks/old/
 notebooks/output/
 supplementary/output/
+supplementary/tex/
 supplementary/python/logs/
 
 # Archive / old versions
@@ -58,3 +60,10 @@ paper/v1/
 tex/tonterie/
 tex/abstract_sevilla/
 supplementary-gleam-diffusion_AV_6.tex
+
+# Archived old material (not versioned)
+.bak/
+
+# Machine-specific settings of the shell scripts
+pipeline_production/local.env
+

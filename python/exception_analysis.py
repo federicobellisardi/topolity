@@ -22,11 +22,12 @@ from shapely.geometry import LineString
 
 
 
-DATA_ROOT = Path("/home/fbellisardi/code/topolity/data/data_processed")
-OUT_ROOT = Path("/home/fbellisardi/code/topolity/notebooks/output")
+ROOT = Path(__file__).resolve().parents[1]
+DATA_ROOT = ROOT / "data" / "data_processed"
+OUT_ROOT = ROOT / "notebooks" / "output"
 OUT_ROOT.mkdir(parents=True, exist_ok=True)
 
-MIN_TRANSLATION_M = 200
+from study_config import MIN_TRANSLATION_M, step2_table  # noqa: E402
 
 MAKE_OVERLAYS = True
 MAX_OVERLAYS_PER_CITY = None  # es. 5, oppure None per tutte
@@ -322,7 +323,7 @@ def make_overlay_image(
 
 
 def process_city(city: str) -> dict:
-    csv_path = DATA_ROOT / city / "graphs_fine_grid" / "fine_grid_gravitational_work.csv"
+    csv_path = step2_table(city)
     graphs_dir = DATA_ROOT / city / "graphs_fine_grid"
 
     city_out = OUT_ROOT / city
@@ -357,13 +358,13 @@ def process_city(city: str) -> dict:
     orig = df[df["variant_type"].astype(str) == "original"]
 
     if orig.empty:
-        print(f"[{city}] original non trovato")
+        print(f"[{city}] observed embedding not found")
         return {"city": city, "status": "no_original"}
 
     E0 = float(orig.iloc[0]["energy_J"])
 
     if not np.isfinite(E0) or E0 == 0:
-        print(f"[{city}] energia originale non valida: {E0}")
+        print(f"[{city}] invalid energy of the observed embedding: {E0}")
         return {"city": city, "status": "bad_original_energy"}
 
     df["energy_diff_J"] = E0 - df["energy_J"]
@@ -750,7 +751,7 @@ def main():
     analysis_fp = OUT_ROOT / "analysis_summary_per_city.csv"
 
     if USE_EXISTING_SUMMARY_IF_AVAILABLE and analysis_fp.exists():
-        print(f"[info] Uso summary esistente senza ricalcolare le città: {analysis_fp}")
+        print(f"[info] using the existing summary without recomputing the cities: {analysis_fp}")
         plot_aggregate_results(analysis_fp)
         return
 

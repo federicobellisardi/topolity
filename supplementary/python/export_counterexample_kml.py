@@ -35,7 +35,7 @@ import pandas as pd
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon
 
 
-ROOT = Path("/home/fbellisardi/code/topolity")
+ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT / "data" / "data_processed"
 SUPP_DIR = ROOT / "supplementary"
 TABLE_DIR = SUPP_DIR / "output" / "tables"

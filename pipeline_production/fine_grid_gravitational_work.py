@@ -18,9 +18,9 @@ from tqdm import tqdm
 import networkx as nx
 import networkit as nk
 from networkit import distance
-from shapely.geometry import LineString
 from pyproj import Transformer
-import math
+
+from terrain import GeoDEM, MetricFrame, clean_elevation_profile, resample_polyline
 
 
 # Constants
@@ -29,11 +29,20 @@ DS = 10.0    # Sampling interval along edges (meters)
 M_PHYS_KG = 1200.0
 G_PHYS = 9.81
 
+# O/D points: uniform random points in each cell, snapped to the nearest network
+# node inside the cell; origins and destinations are drawn independently and the
+# totals are averaged over OD_SAMPLES realisations.
+OD_SAMPLES = 5
+OD_SEED = 42
+
+# Bump whenever the energy computation changes, so --resume never mixes outputs.
+METHOD_VERSION = "2"
+
 # CRS for the cells grid (matches wheight.py conf)
 CELLS_CRS = "EPSG:3857"
 
 DEBUG_LENGTHS = True
-ROOT = Path("/home/fbellisardi/code/topolity")
+ROOT = Path(__file__).resolve().parents[1]   # repository root
 DEFAULT_DATA_ROOT = ROOT / "data" / "data_processed"
 
 
@@ -57,48 +66,57 @@ def graph_looks_lonlat(G: nx.MultiDiGraph) -> bool:
     )
 
 
-def make_metric_transformer_from_graph(G: nx.MultiDiGraph):
+def graph_bounds(G: nx.MultiDiGraph) -> Tuple[float, float, float, float]:
+    """(minx, miny, maxx, maxy) of nodes and edge geometries."""
+    xs = [d["x"] for _, d in G.nodes(data=True)]
+    ys = [d["y"] for _, d in G.nodes(data=True)]
+    for _, _, d in G.edges(data=True):
+        geom = d.get("geometry")
+        if geom is not None:
+            gx0, gy0, gx1, gy1 = geom.bounds
+            xs += [gx0, gx1]
+            ys += [gy0, gy1]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def sample_od_nodes(G: nx.MultiDiGraph, cells_df: pd.DataFrame, n_samples: int,
+                    seed: int) -> List[Tuple[Dict[int, int], Dict[int, int]]]:
     """
-    If graph coordinates are lon/lat, project them to a local metric CRS.
-    If they already look metric, return None.
+    Draw `n_samples` independent (origin_map, dest_map) pairs.
+
+    For every cell, origin and destination points are drawn uniformly in the cell
+    rectangle and each is snapped to the nearest network node lying inside the
+    cell (metric distance in a local frame). Cells without nodes map to None.
     """
-    if not graph_looks_lonlat(G):
-        return None
+    if n_samples < 1:
+        raise ValueError("n_samples must be >= 1")
+    frame = MetricFrame.from_graph(G)
+    nodes = np.array(list(G.nodes()))
+    lon = np.fromiter((d["x"] for _, d in G.nodes(data=True)), float, count=len(nodes))
+    lat = np.fromiter((d["y"] for _, d in G.nodes(data=True)), float, count=len(nodes))
+    x_m, y_m = frame.to_metric(lon, lat)
 
-    xs = []
-    ys = []
-
-    for _, data in G.nodes(data=True):
-        x = data.get("x", data.get("lon"))
-        y = data.get("y", data.get("lat"))
-        if x is not None and y is not None:
-            xs.append(float(x))
-            ys.append(float(y))
-
-    lon0 = float(np.mean(xs))
-    lat0 = float(np.mean(ys))
-
-    # Local azimuthal equidistant projection centered on the city
-    proj_str = (
-        f"+proj=aeqd +lat_0={lat0} +lon_0={lon0} "
-        "+datum=WGS84 +units=m +no_defs"
-    )
-
-    return Transformer.from_crs("EPSG:4326", proj_str, always_xy=True)
-
-
-def coords_to_metric(coords: np.ndarray, transformer=None) -> np.ndarray:
-    """
-    Convert Nx2 coordinates to meters if transformer is available.
-    Otherwise assume they are already metric.
-    """
-    coords = np.asarray(coords, dtype=float)
-
-    if transformer is None:
-        return coords
-
-    x_m, y_m = transformer.transform(coords[:, 0], coords[:, 1])
-    return np.column_stack([x_m, y_m])
+    rng = np.random.default_rng(seed)
+    origin_maps = [{} for _ in range(n_samples)]
+    dest_maps = [{} for _ in range(n_samples)]
+    for row in cells_df.sort_values("cell").itertuples(index=False):
+        inside = np.flatnonzero((lon >= row.lon_min) & (lon <= row.lon_max)
+                                & (lat >= row.lat_min) & (lat <= row.lat_max))
+        # Draw for every cell, even empty ones, so draws do not depend on the network.
+        p_lon = rng.uniform(row.lon_min, row.lon_max, size=2 * n_samples)
+        p_lat = rng.uniform(row.lat_min, row.lat_max, size=2 * n_samples)
+        if inside.size == 0:
+            for k in range(n_samples):
+                origin_maps[k][row.cell] = None
+                dest_maps[k][row.cell] = None
+            continue
+        px, py = frame.to_metric(p_lon, p_lat)
+        d2 = (px[:, None] - x_m[inside][None, :])**2 + (py[:, None] - y_m[inside][None, :])**2
+        picked = nodes[inside[np.argmin(d2, axis=1)]]
+        for k in range(n_samples):
+            origin_maps[k][row.cell] = picked[2 * k].item()
+            dest_maps[k][row.cell] = picked[2 * k + 1].item()
+    return list(zip(origin_maps, dest_maps))
 
 
 def compute_lambda_from_fuel_params(
@@ -194,22 +212,6 @@ def parse_filename(filename: str) -> Tuple[str, float]:
     return ('unknown', 0.0)
 
 
-def load_dem_reader(dem_file: Path):
-    """Load DEM for elevation sampling."""
-    try:
-        import rasterio
-        if dem_file.exists():
-            src = rasterio.open(str(dem_file))
-            print(f"Loaded DEM: {dem_file}")
-            return src
-        else:
-            print(f"DEM not found: {dem_file}")
-            return None
-    except ImportError:
-        print("rasterio not installed, cannot sample elevations")
-        return None
-
-
 def _select_edge_data(G: nx.MultiDiGraph, u, v, data: Dict = None) -> Dict:
     """Select one representative edge-attribute dict for (u, v)."""
     if data is not None:
@@ -245,224 +247,90 @@ def _select_edge_data(G: nx.MultiDiGraph, u, v, data: Dict = None) -> Dict:
     return best if best is not None else candidates[0]
 
 
-def compute_edge_vertical_gain_m(
+def _oriented_edge_coords(G: nx.MultiDiGraph, u, v, data: Dict) -> np.ndarray:
+    """Edge polyline in lon/lat, oriented from u to v (uphill gain is directional)."""
+    xu, yu = G.nodes[u]["x"], G.nodes[u]["y"]
+    xv, yv = G.nodes[v]["x"], G.nodes[v]["y"]
+    geom = data.get("geometry")
+    if geom is None:
+        return np.array([[xu, yu], [xv, yv]], dtype=float)
+    c = np.asarray(geom.coords, dtype=float)[:, :2]
+    if np.hypot(c[0, 0] - xu, c[0, 1] - yu) > np.hypot(c[-1, 0] - xu, c[-1, 1] - yu):
+        c = c[::-1]
+    return c
+
+
+def compute_edge_profile(
         G: nx.MultiDiGraph,
         u,
         v,
-        dem_src,
+        dem: GeoDEM,
+        frame: MetricFrame,
         ds: float = DS,
-        elevation_source: str = "node",
+        elevation_source: str = "dem",
         edge_data: Dict = None,
-        metric_transformer=None,
-    ) -> Tuple[float, List[Dict]]:
+    ) -> Tuple[float, float, float, List[Dict]]:
     """
-    Compute positive vertical gain [m] for a single edge.
+    Resample the edge every ~ds metres and return
+
+        L_2D   = sum sqrt(dx^2 + dy^2)
+        L_3D   = sum sqrt(dx^2 + dy^2 + dz^2)
+        Dh^+   = sum max(0, z_{i+1} - z_i)
+
+    with z sampled bilinearly from the DEM at every point (elevation_source='dem')
+    or, for the legacy mode, interpolated linearly between the node elevations.
+    Both terms use the same profile cleaned by terrain.clean_elevation_profile.
     """
     data = _select_edge_data(G, u, v, edge_data)
+    lon, lat = _oriented_edge_coords(G, u, v, data).T
+    x, y = frame.to_metric(lon, lat)
+    xs, ys = resample_polyline(x, y, ds)
+    n_pts = len(xs)
+    lon_s, lat_s = frame.to_lonlat(xs, ys)
 
-    geom = data.get("geometry")
-
-    if geom is None:
-        x1, y1 = G.nodes[u]["x"], G.nodes[u]["y"]
-        x2, y2 = G.nodes[v]["x"], G.nodes[v]["y"]
-        geom = LineString([(x1, y1), (x2, y2)])
-
-    raw_coords = np.array(geom.coords, dtype=float)
-    metric_transformer = make_metric_transformer_from_graph(G) if metric_transformer is None else metric_transformer
-    raw_coords_m = coords_to_metric(raw_coords, metric_transformer)
-
-    dx_raw = np.diff(raw_coords_m[:, 0])
-    dy_raw = np.diff(raw_coords_m[:, 1])
-    length_2d_m = float(np.sum(np.sqrt(dx_raw**2 + dy_raw**2)))
-
-    n_pts = max(int(length_2d_m / ds) + 1, 2)
-
-    dists = np.linspace(0, float(geom.length), n_pts)
-    pts = [geom.interpolate(d) for d in dists]
-    coords = [(pt.x, pt.y) for pt in pts]
-
-    z_u = G.nodes[u].get("z", None)
-    z_v = G.nodes[v].get("z", None)
-
-    has_node_z = (
-        z_u is not None
-        and z_v is not None
-        and np.isfinite(float(z_u))
-        and np.isfinite(float(z_v))
-    )
-
-    if elevation_source == "node" and has_node_z:
-        elevs = np.linspace(float(z_u), float(z_v), n_pts)
-    elif dem_src is not None:
-        elevs = [val[0] for val in dem_src.sample(coords)]
-    elif has_node_z:
-        elevs = np.linspace(float(z_u), float(z_v), n_pts)
+    if elevation_source == "dem":
+        if dem is None:
+            raise RuntimeError("elevation_source='dem' requires a DEM")
+        elevs = dem.sample(lon_s, lat_s)
     else:
-        elevs = np.zeros(n_pts, dtype=float)
-
-    # Clamp elevations to sea level (0 m).  SRTM and similar DEMs sometimes
-    # return negative values over water bodies or as artefacts in coastal/delta
-    # areas (e.g. Buenos Aires: -86 m; Brussels: -220 m).  Using raw negatives
-    # inflates the apparent uphill gain for paths that cross these regions,
-    # producing spurious counterexamples.  Since the gravitational work only
-    # counts relative *uphill* effort, clamping the datum at 0 is physically
-    # conservative and eliminates the artefact without affecting inland cities.
-    elevs = np.maximum(0.0, np.asarray(elevs, dtype=float))
-
-    vertical_gain_m = 0.0
-    segment_results = []
-
-    for i, (h1, h2) in enumerate(zip(elevs[:-1], elevs[1:])):
-        if h2 > h1:
-            seg_vertical_gain_m = float(h2 - h1)
-            vertical_gain_m += seg_vertical_gain_m
-        else:
-            seg_vertical_gain_m = 0.0
-
-        segment_results.append({
-            "start_coord": coords[i],
-            "end_coord": coords[i + 1],
-            "vertical_gain_m": seg_vertical_gain_m,
-        })
-
-    return vertical_gain_m, segment_results
-
-
-def compute_edge_geometry_length(
-        G: nx.MultiDiGraph,
-        u,
-        v,
-        edge_data: Dict = None,
-        metric_transformer=None,
-        ds: float = DS,
-    ) -> float:
-    """
-    Return 2D metric length using the same sampling logic used for 3D length.
-    This guarantees L3D >= L2D up to numerical precision.
-    """
-    data = _select_edge_data(G, u, v, edge_data)
-
-    geom = data.get("geometry")
-    if geom is None:
-        x1, y1 = G.nodes[u]["x"], G.nodes[u]["y"]
-        x2, y2 = G.nodes[v]["x"], G.nodes[v]["y"]
-        geom = LineString([(x1, y1), (x2, y2)])
-
-    raw_coords = np.array(geom.coords, dtype=float)
-    raw_coords_m = coords_to_metric(raw_coords, metric_transformer)
-
-    dx_raw = np.diff(raw_coords_m[:, 0])
-    dy_raw = np.diff(raw_coords_m[:, 1])
-    length_2d_m = float(np.sum(np.sqrt(dx_raw**2 + dy_raw**2)))
-
-    n_pts = max(int(length_2d_m / ds) + 1, 2)
-
-    dists = np.linspace(0, float(geom.length), n_pts)
-    pts = [geom.interpolate(d) for d in dists]
-
-    coords = np.array([(pt.x, pt.y) for pt in pts], dtype=float)
-    coords_m = coords_to_metric(coords, metric_transformer)
-
-    dx = np.diff(coords_m[:, 0])
-    dy = np.diff(coords_m[:, 1])
-
-    return float(np.sum(np.sqrt(dx**2 + dy**2)))
-
-def compute_edge_3d_length(
-        G: nx.MultiDiGraph,
-        u,
-        v,
-        edge_data: Dict = None,
-        dem_src=None,
-        ds: float = DS,
-        elevation_source: str = "node",
-        metric_transformer=None,
-    ) -> float:
-    """
-    Return 3D metric length:
-
-        L_3D = sum sqrt(dx_m^2 + dy_m^2 + dz_m^2)
-
-    where dx_m, dy_m and dz_m are all in meters.
-    """
-    data = _select_edge_data(G, u, v, edge_data)
-
-    geom = data.get("geometry")
-    if geom is None:
-        x1, y1 = G.nodes[u]["x"], G.nodes[u]["y"]
-        x2, y2 = G.nodes[v]["x"], G.nodes[v]["y"]
-        geom = LineString([(x1, y1), (x2, y2)])
-
-    # First compute metric 2D length
-    raw_coords = np.array(geom.coords, dtype=float)
-    raw_coords_m = coords_to_metric(raw_coords, metric_transformer)
-
-    dx_raw = np.diff(raw_coords_m[:, 0])
-    dy_raw = np.diff(raw_coords_m[:, 1])
-    length_2d_m = float(np.sum(np.sqrt(dx_raw**2 + dy_raw**2)))
-
-    # Sample along the original geometry parameter, but choose number of points from metric length
-    n_pts = max(int(length_2d_m / ds) + 1, 2)
-
-    # geom.length may be degrees, but interpolation parameter must use geom.length units
-    dists = np.linspace(0, float(geom.length), n_pts)
-    pts = [geom.interpolate(d) for d in dists]
-
-    coords = np.array([(pt.x, pt.y) for pt in pts], dtype=float)
-    coords_m = coords_to_metric(coords, metric_transformer)
-
-    z_u = G.nodes[u].get("z", None)
-    z_v = G.nodes[v].get("z", None)
-
-    has_node_z = (
-        z_u is not None
-        and z_v is not None
-        and np.isfinite(float(z_u))
-        and np.isfinite(float(z_v))
-    )
-
-    if elevation_source == "node" and has_node_z:
+        z_u = G.nodes[u].get("z", np.nan)
+        z_v = G.nodes[v].get("z", np.nan)
         elevs = np.linspace(float(z_u), float(z_v), n_pts)
+    elevs = clean_elevation_profile(elevs)
 
-    elif dem_src is not None:
-        # DEM sampling expects original lon/lat if DEM is in EPSG:4326
-        elevs = np.array([val[0] for val in dem_src.sample(coords)], dtype=float)
-
-    elif has_node_z:
-        elevs = np.linspace(float(z_u), float(z_v), n_pts)
-
-    else:
-        elevs = np.zeros(n_pts, dtype=float)
-
-    dx = np.diff(coords_m[:, 0])
-    dy = np.diff(coords_m[:, 1])
+    dxy = np.hypot(np.diff(xs), np.diff(ys))
     dz = np.diff(elevs)
+    up = np.clip(dz, 0.0, None)
 
-    return float(np.sum(np.sqrt(dx**2 + dy**2 + dz**2)))
+    segment_results = [
+        {
+            "start_coord": (lon_s[i], lat_s[i]),
+            "end_coord": (lon_s[i + 1], lat_s[i + 1]),
+            "vertical_gain_m": float(up[i]),
+        }
+        for i in range(n_pts - 1)
+    ]
+    return (float(dxy.sum()), float(np.sqrt(dxy**2 + dz**2).sum()),
+            float(up.sum()), segment_results)
 
 
 class ODWorkEvaluator:
     """OD-weighted gravitational work evaluator (aligned to wheight.py logic)."""
-    def __init__(self, G: nx.MultiDiGraph, dem_src, ds: float = DS,
-                 keep_segments: bool = False, elevation_source: str = 'node'):
+    def __init__(self, G: nx.MultiDiGraph, dem: GeoDEM, ds: float = DS,
+                 keep_segments: bool = False, elevation_source: str = 'dem'):
+        if not graph_looks_lonlat(G):
+            raise ValueError("ODWorkEvaluator expects a lon/lat (EPSG:4326) graph")
         self.G = G
-        self.dem_src = dem_src
+        self.dem = dem
         self.ds = ds
         self.keep_segments = keep_segments
         self.elevation_source = elevation_source
-        
-        self.metric_transformer = make_metric_transformer_from_graph(G)
-
-        if DEBUG_LENGTHS:
-            print("\n[DEBUG] Coordinate system check")
-            print(f"  graph_looks_lonlat = {graph_looks_lonlat(G)}")
-            print(f"  using_metric_transformer = {self.metric_transformer is not None}")        
-        
+        self.frame = MetricFrame.from_graph(G)
 
         self.node2id = {n: i for i, n in enumerate(G.nodes())}
         self.id2node = {i: n for n, i in self.node2id.items()}
 
-        # Precompute per-edge positive vertical gain [m]
+        # Precompute per-edge positive vertical gain [m] and 2D/3D lengths [m]
         self.arc_vertical_gain_m = {}
         self.arc_length_2d = {}
         self.arc_length_3d = {}
@@ -475,41 +343,17 @@ class ODWorkEvaluator:
                 continue
             seen_arcs.add((u, v))
 
-            selected_data = _select_edge_data(G, u, v)
-            
-            vertical_gain_m, segments = compute_edge_vertical_gain_m(
-                G,
-                u,
-                v,
-                self.dem_src,
+            l2d, l3d, gain, segments = compute_edge_profile(
+                G, u, v, self.dem, self.frame,
                 ds=self.ds,
                 elevation_source=self.elevation_source,
-                edge_data=selected_data,
-                metric_transformer=self.metric_transformer,
             )
-            self.arc_vertical_gain_m[(self.node2id[u], self.node2id[v])] = vertical_gain_m
-
-            self.arc_length_2d[(self.node2id[u], self.node2id[v])] = compute_edge_geometry_length(
-                G,
-                u,
-                v,
-                edge_data=selected_data,
-                metric_transformer=self.metric_transformer,
-                ds=self.ds,
-            )
-
-            self.arc_length_3d[(self.node2id[u], self.node2id[v])] = compute_edge_3d_length(
-                G,
-                u,
-                v,
-                edge_data=selected_data,
-                dem_src=self.dem_src,
-                ds=self.ds,
-                elevation_source=self.elevation_source,
-                metric_transformer=self.metric_transformer,
-            )
-                       
-            if self.keep_segments: self.arc_vertical_gain_segments[(self.node2id[u], self.node2id[v])] = segments
+            key = (self.node2id[u], self.node2id[v])
+            self.arc_vertical_gain_m[key] = gain
+            self.arc_length_2d[key] = l2d
+            self.arc_length_3d[key] = l3d
+            if self.keep_segments:
+                self.arc_vertical_gain_segments[key] = segments
 
         if DEBUG_LENGTHS and self.arc_length_2d:
             l2 = np.array(list(self.arc_length_2d.values()), dtype=float)
@@ -549,52 +393,32 @@ class ODWorkEvaluator:
     def compute_total_lengths_for_graph(
             self,
             nk_graph,
-            cell_map: Dict[int, int],
-            od_work_df: pd.DataFrame,
-            od_hol_df: pd.DataFrame,
+            origin_map: Dict[int, int],
+            dest_map: Dict[int, int],
+            od_by_origin: Dict[int, Dict[int, float]],
         ) -> Tuple[float, float, float]:
         """
-        Run Dijkstra on the provided graph and then measure:
-        - vertical uphill gain along selected paths
-        - 2D path length along selected paths
-        - 3D path length along selected paths
-
-        Returns:
-            total_vertical_gain, total_length_2d, total_length_3d
+        Route every OD pair from origin_map[o] to dest_map[d] on `nk_graph` and return
+        the flow-weighted totals (vertical uphill gain, 2D length, 3D length).
         """
-
-        od_by_origin = {}
-
-        for origin, dest, flow in od_work_df.itertuples(index=False, name=None):
-            od_by_origin.setdefault(origin, {}).setdefault(dest, [0.0, 0.0])[0] += float(flow)
-
-        for origin, dest, flow in od_hol_df.itertuples(index=False, name=None):
-            od_by_origin.setdefault(origin, {}).setdefault(dest, [0.0, 0.0])[1] += float(flow)
-
         total_vertical_gain_m = 0.0
         total_length_2d = 0.0
         total_length_3d = 0.0
 
-        for origin_cell, dest_map in tqdm(od_by_origin.items(), desc="OD shortest paths", leave=False):
-            src_node = cell_map.get(origin_cell)
-            if src_node is None:
-                continue
-
-            sid = self.node2id.get(src_node)
+        for origin_cell, flows in tqdm(od_by_origin.items(), desc="OD shortest paths", leave=False):
+            sid = self.node2id.get(origin_map.get(origin_cell))
             if sid is None:
                 continue
 
             runner = distance.Dijkstra(nk_graph, sid, True)
             runner.run()
 
-            for dest_cell, (flow_wd, flow_hol) in dest_map.items():
-                dest_node = cell_map.get(dest_cell)
-                if dest_node is None:
+            for dest_cell, flow_total in flows.items():
+                tid = self.node2id.get(dest_map.get(dest_cell))
+                if tid is None or not flow_total:
                     continue
-
-                tid = self.node2id.get(dest_node)
-                if tid is None:
-                    continue
+                if tid == sid:
+                    continue  # zero-length trip
 
                 path = runner.getPath(tid)
                 if not path:
@@ -603,261 +427,43 @@ class ODWorkEvaluator:
                 path_vertical_gain_m = 0.0
                 path_length_2d = 0.0
                 path_length_3d = 0.0
-
                 for a_id, b_id in zip(path[:-1], path[1:]):
                     path_vertical_gain_m += self.arc_vertical_gain_m.get((a_id, b_id), 0.0)
                     path_length_2d += self.arc_length_2d.get((a_id, b_id), 0.0)
                     path_length_3d += self.arc_length_3d.get((a_id, b_id), 0.0)
 
-                flow_total = flow_wd + flow_hol
-
-                if flow_total:
-                    total_vertical_gain_m += flow_total * path_vertical_gain_m
-                    total_length_2d += flow_total * path_length_2d
-                    total_length_3d += flow_total * path_length_3d
+                total_vertical_gain_m += flow_total * path_vertical_gain_m
+                total_length_2d += flow_total * path_length_2d
+                total_length_3d += flow_total * path_length_3d
 
         return total_vertical_gain_m, total_length_2d, total_length_3d
 
     def compute_total_lengths_2d_and_3d_dijkstra(
         self,
-        cell_map: Dict[int, int],
+        od_samples: List[Tuple[Dict[int, int], Dict[int, int]]],
         od_work_df: pd.DataFrame,
         od_hol_df: pd.DataFrame,
-    ) -> Dict[str, float]:
+    ) -> Dict[str, np.ndarray]:
         """
-        Compare Dijkstra paths computed using 2D and 3D edge lengths.
+        Totals on paths routed with 2D and 3D edge lengths, one value per
+        (origin_map, dest_map) realisation in `od_samples`.
         """
+        od_by_origin: Dict[int, Dict[int, float]] = {}
+        for od_df in (od_work_df, od_hol_df):
+            for origin, dest, flow in od_df.itertuples(index=False, name=None):
+                d = od_by_origin.setdefault(origin, {})
+                d[dest] = d.get(dest, 0.0) + float(flow)
 
-        v_on_2d, l2d_on_2d, l3d_on_2d = self.compute_total_lengths_for_graph(
-            self.nkG_2d,
-            cell_map,
-            od_work_df,
-            od_hol_df,
-        )
-
-        v_on_3d, l2d_on_3d, l3d_on_3d = self.compute_total_lengths_for_graph(
-            self.nkG_3d,
-            cell_map,
-            od_work_df,
-            od_hol_df,
-        )
-
-        return {
-            "vertical_gain_on_2d_path": v_on_2d,
-            "path_length_2d_on_2d_path": l2d_on_2d,
-            "path_length_3d_on_2d_path": l3d_on_2d,
-
-            "vertical_gain_on_3d_path": v_on_3d,
-            "path_length_2d_on_3d_path": l2d_on_3d,
-            "path_length_3d_on_3d_path": l3d_on_3d,
-        }
-
-    def compute_total_work(self, cell_map: Dict[int, int], od_df: pd.DataFrame) -> float:
-        """Backward-compatible wrapper returning only vertical uphill work."""
-        total_wd, _ = self.compute_total_work_pair(cell_map, od_df, pd.DataFrame(columns=od_df.columns))
-        return total_wd
-
-    def compute_total_cost_pair(self, cell_map: Dict[int, int],
-                                od_work_df: pd.DataFrame,
-                                od_hol_df: pd.DataFrame,
-                                horizontal_cost_weight: float = HORIZONTAL_COST_WEIGHT) -> Tuple[float, float, float]:
-        """Compute vertical work, horizontal travel cost and their weighted sum."""
-        od_by_origin = {}
-
-        for origin, dest, flow in od_work_df.itertuples(index=False, name=None):
-            od_by_origin.setdefault(origin, {}).setdefault(dest, [0.0, 0.0])[0] += float(flow)
-
-        for origin, dest, flow in od_hol_df.itertuples(index=False, name=None):
-            od_by_origin.setdefault(origin, {}).setdefault(dest, [0.0, 0.0])[1] += float(flow)
-
-        total_vertical = 0.0
-        total_horizontal_2d = 0.0
-        total_horizontal_3d = 0.0
-
-        for origin_cell, dest_map in tqdm(od_by_origin.items(), desc="OD shortest paths", leave=False):
-            src_node = cell_map.get(origin_cell)
-            if src_node is None:
-                continue
-            sid = self.node2id.get(src_node)
-            if sid is None:
-                continue
-            runner = distance.Dijkstra(self.nkG, sid, True)
-            runner.run()
-
-            for dest_cell, (flow_wd, flow_hol) in dest_map.items():
-                dest_node = cell_map.get(dest_cell)
-                if dest_node is None:
-                    continue
-                tid = self.node2id.get(dest_node)
-                if tid is None:
-                    continue
-                path = runner.getPath(tid)
-                if not path:
-                    continue
-                path_vertical = 0.0
-                path_length_2d = 0.0
-                path_length_3d = 0.0
-                for a_id, b_id in zip(path[:-1], path[1:]):
-                    path_vertical += self.arc_vertical_gain_m.get((a_id, b_id), 0.0)
-                    path_length_2d += self.arc_length_2d.get((a_id, b_id), 0.0)
-                    path_length_3d += self.arc_length_3d.get((a_id, b_id), 0.0)
-
-                if flow_wd:
-                    total_vertical += flow_wd * path_vertical
-                    total_horizontal_2d += flow_wd * path_length_2d
-                    total_horizontal_3d += flow_wd * path_length_3d
-                if flow_hol:
-                    total_vertical += flow_hol * path_vertical
-                    total_horizontal_2d += flow_hol * path_length_2d
-                    total_horizontal_3d += flow_hol * path_length_3d
-
-        total_combined_2d = total_vertical + horizontal_cost_weight * total_horizontal_2d
-        
-        vertical_energy_J = M_PHYS_KG * G_PHYS * total_vertical
-        horizontal_energy_2d_J = horizontal_cost_weight * total_horizontal_2d
-
-        total_combined_2d = vertical_energy_J + horizontal_energy_2d_J
-        
-        
-        return total_vertical, total_horizontal_2d, total_combined_2d
-
-    def compute_total_cost_pair_all(self, cell_map: Dict[int, int],
-                                    od_work_df: pd.DataFrame,
-                                    od_hol_df: pd.DataFrame,
-                                    horizontal_cost_weight: float = HORIZONTAL_COST_WEIGHT) -> Tuple[float, float, float, float, float]:
-        """Compute vertical work, horizontal 2D/3D travel totals and both combined costs.
-
-        Returns: (vertical, horizontal_2d, combined_2d, horizontal_3d, combined_3d)
-        """
-        od_by_origin = {}
-
-        for origin, dest, flow in od_work_df.itertuples(index=False, name=None):
-            od_by_origin.setdefault(origin, {}).setdefault(dest, [0.0, 0.0])[0] += float(flow)
-
-        for origin, dest, flow in od_hol_df.itertuples(index=False, name=None):
-            od_by_origin.setdefault(origin, {}).setdefault(dest, [0.0, 0.0])[1] += float(flow)
-
-        total_vertical = 0.0
-        total_horizontal_2d = 0.0
-        total_horizontal_3d = 0.0
-
-        for origin_cell, dest_map in tqdm(od_by_origin.items(), desc="OD shortest paths", leave=False):
-            src_node = cell_map.get(origin_cell)
-            if src_node is None:
-                continue
-            sid = self.node2id.get(src_node)
-            if sid is None:
-                continue
-            runner = distance.Dijkstra(self.nkG, sid, True)
-            runner.run()
-
-            for dest_cell, (flow_wd, flow_hol) in dest_map.items():
-                dest_node = cell_map.get(dest_cell)
-                if dest_node is None:
-                    continue
-                tid = self.node2id.get(dest_node)
-                if tid is None:
-                    continue
-                path = runner.getPath(tid)
-                if not path:
-                    continue
-                path_vertical = 0.0
-                path_length_2d = 0.0
-                path_length_3d = 0.0
-                for a_id, b_id in zip(path[:-1], path[1:]):
-                    path_vertical += self.arc_vertical_gain_m.get((a_id, b_id), 0.0)
-                    path_length_2d += self.arc_length_2d.get((a_id, b_id), 0.0)
-                    path_length_3d += self.arc_length_3d.get((a_id, b_id), 0.0)
-
-                if flow_wd:
-                    total_vertical += flow_wd * path_vertical
-                    total_horizontal_2d += flow_wd * path_length_2d
-                    total_horizontal_3d += flow_wd * path_length_3d
-                if flow_hol:
-                    total_vertical += flow_hol * path_vertical
-                    total_horizontal_2d += flow_hol * path_length_2d
-                    total_horizontal_3d += flow_hol * path_length_3d
-
-        vertical_energy_J = M_PHYS_KG * G_PHYS * total_vertical
-        horizontal_energy_2d_J = horizontal_cost_weight * total_horizontal_2d
-        horizontal_energy_3d_J = horizontal_cost_weight * total_horizontal_3d
-
-        total_combined_2d = vertical_energy_J + horizontal_energy_2d_J
-        total_combined_3d = vertical_energy_J + horizontal_energy_3d_J
-
-        return total_vertical, total_horizontal_2d, total_combined_2d, total_horizontal_3d, total_combined_3d
-
-    def compute_total_work_pair(self, cell_map: Dict[int, int],
-                                od_work_df: pd.DataFrame,
-                                od_hol_df: pd.DataFrame) -> Tuple[float, float]:
-        """Compute working-day and holiday work with one Dijkstra pass per origin."""
-        od_by_origin = {}
-
-        for origin, dest, flow in od_work_df.itertuples(index=False, name=None):
-            od_by_origin.setdefault(origin, {}).setdefault(dest, [0.0, 0.0])[0] += float(flow)
-
-        for origin, dest, flow in od_hol_df.itertuples(index=False, name=None):
-            od_by_origin.setdefault(origin, {}).setdefault(dest, [0.0, 0.0])[1] += float(flow)
-
-        total_wd = 0.0
-        total_hol = 0.0
-
-        for origin_cell, dest_map in tqdm(od_by_origin.items(), desc="OD shortest paths", leave=False):
-            src_node = cell_map.get(origin_cell)
-            if src_node is None:
-                continue
-            sid = self.node2id.get(src_node)
-            if sid is None:
-                continue
-
-            runner = distance.Dijkstra(self.nkG, sid, True)
-            runner.run()
-
-            for dest_cell, (flow_wd, flow_hol) in dest_map.items():
-                dest_node = cell_map.get(dest_cell)
-                if dest_node is None:
-                    continue
-                tid = self.node2id.get(dest_node)
-                if tid is None:
-                    continue
-                path = runner.getPath(tid)
-                if not path:
-                    continue
-
-                path_work = 0.0
-                for a_id, b_id in zip(path[:-1], path[1:]):
-                    path_work += self.arc_vertical_gain_m.get((a_id, b_id), 0.0)
-
-                if flow_wd:
-                    total_wd += flow_wd * path_work
-                if flow_hol:
-                    total_hol += flow_hol * path_work
-
-        return total_wd, total_hol
-
-    def compute_total_cost_components(self, cell_map: Dict[int, int],
-                                       od_work_df: pd.DataFrame,
-                                       od_hol_df: pd.DataFrame,
-                                       horizontal_cost_weight: float = HORIZONTAL_COST_WEIGHT) -> Tuple[float, float, float]:
-        """Convenience wrapper returning vertical, horizontal and combined cost."""
-        return self.compute_total_cost_pair(
-            cell_map,
-            od_work_df,
-            od_hol_df,
-            horizontal_cost_weight=horizontal_cost_weight,
-        )
-
-    def compute_total_cost_components_all(self, cell_map: Dict[int, int],
-                                          od_work_df: pd.DataFrame,
-                                          od_hol_df: pd.DataFrame,
-                                          horizontal_cost_weight: float = HORIZONTAL_COST_WEIGHT) -> Tuple[float, float, float, float, float]:
-        """Return vertical, horizontal_2d, combined_2d, horizontal_3d, combined_3d."""
-        return self.compute_total_cost_pair_all(
-            cell_map,
-            od_work_df,
-            od_hol_df,
-            horizontal_cost_weight=horizontal_cost_weight,
-        )
+        out = {k: [] for k in (
+            "vertical_gain_on_2d_path", "path_length_2d_on_2d_path", "path_length_3d_on_2d_path",
+            "vertical_gain_on_3d_path", "path_length_2d_on_3d_path", "path_length_3d_on_3d_path",
+        )}
+        for origin_map, dest_map in od_samples:
+            v2, l2_2, l3_2 = self.compute_total_lengths_for_graph(self.nkG_2d, origin_map, dest_map, od_by_origin)
+            v3, l2_3, l3_3 = self.compute_total_lengths_for_graph(self.nkG_3d, origin_map, dest_map, od_by_origin)
+            for k, val in zip(out, (v2, l2_2, l3_2, v3, l2_3, l3_3)):
+                out[k].append(val)
+        return {k: np.asarray(v, dtype=float) for k, v in out.items()}
 
 
 def load_expected_graph_filenames(graphs_dir: Path) -> Set[str]:
@@ -891,10 +497,12 @@ def list_graph_files(graphs_dir: Path) -> List[Path]:
     return pkl_files
 
 
-def analyze_graphs(graph_files: List[Path], dem_src, output_csv: Path, city: str,
+def analyze_graphs(graph_files: List[Path], dem_file: Path, output_csv: Path, city: str,
                    resume: bool = False, save_segments: bool = False,
                    gc_every: int = 1, horizontal_cost_weight: float = HORIZONTAL_COST_WEIGHT,
-                   elevation_source: str = 'node') -> pd.DataFrame:
+                   elevation_source: str = 'dem',
+                   data_root: Path = DEFAULT_DATA_ROOT,
+                   od_samples: int = OD_SAMPLES, od_seed: int = OD_SEED) -> pd.DataFrame:
     """
     Compute OD-weighted vertical gain, path lengths, and mobility energy for all graphs and save results to CSV.
 
@@ -917,19 +525,23 @@ def analyze_graphs(graph_files: List[Path], dem_src, output_csv: Path, city: str
         'path_length_3d_on_3d_path_m',
         'total_energy_on_2d_path_J',
         'total_energy_on_3d_path_J',
+        'method_version',
     }
     
     if output_csv.exists():
         if not resume:
-            output_csv.unlink()
+            backup = output_csv.with_suffix('.prev.csv')
+            output_csv.replace(backup)
             wrote_header = False
-            print(f"Existing CSV removed because resume=False: {output_csv}")
+            print(f"Existing CSV moved to {backup} because resume=False")
 
         else:
             try:
                 existing_df = pd.read_csv(output_csv)
 
                 missing = new_expected_cols - set(existing_df.columns)
+                if not missing and set(existing_df['method_version'].astype(str)) != {METHOD_VERSION}:
+                    missing = {'method_version'}
                 if missing:
                     backup = output_csv.with_suffix('.bak.csv')
                     output_csv.replace(backup)
@@ -963,7 +575,7 @@ def analyze_graphs(graph_files: List[Path], dem_src, output_csv: Path, city: str
     to_process = [p for p in graph_files if (not resume or p.name not in existing_done)]
     print(f"\nAnalyzing {len(to_process)} graphs (skipped {len(graph_files) - len(to_process)} already done)...")
     
-    base_dir = Path(f"/home/fbellisardi/code/topolity/data/data_processed/{city}")
+    base_dir = Path(data_root) / city
     cells_dir = base_dir / f"{city}_basic_model/1000_cells"
     cells_file = cells_dir / "cell_coordinates.csv"
     od_w_file = cells_dir / "od_matrix_working_day.csv"
@@ -1012,34 +624,9 @@ def analyze_graphs(graph_files: List[Path], dem_src, output_csv: Path, city: str
     od_work = load_od_minimal(od_w_file)
     od_hol = load_od_minimal(od_h_file)
 
-    def map_cells_to_nodes(G: nx.MultiDiGraph, cell_df: pd.DataFrame) -> Dict[int, int]:
-        xs = np.array([data.get('x', data.get('lon')) for _, data in G.nodes(data=True)])
-        ys = np.array([data.get('y', data.get('lat')) for _, data in G.nodes(data=True)])
-        nodes = np.array([n for n, _ in G.nodes(data=True)])
-
-        mapping = {}
-        for _, row in cell_df.iterrows():
-            mask = (
-                (xs >= row.lon_min) & (xs <= row.lon_max) &
-                (ys >= row.lat_min) & (ys <= row.lat_max)
-            )
-            lst = nodes[mask].tolist()
-            if not lst:
-                mapping[row.cell] = None
-                continue
-            cent = np.array([row.cent_lon, row.cent_lat])
-            coords = np.array([
-                (
-                    G.nodes[n].get('x', G.nodes[n].get('lon')),
-                    G.nodes[n].get('y', G.nodes[n].get('lat'))
-                )
-                for n in lst
-            ])
-            idx_min = np.argmin(np.linalg.norm(coords - cent, axis=1))
-            mapping[row.cell] = lst[idx_min]
-        return mapping
-
-    # Build cell map using the original graph (closest nodes), loaded once.
+    # Sample O/D nodes on the original graph, loaded once. Node ids move rigidly
+    # with every transformed variant, so all variants share the same draws
+    # (common random numbers for the comparison between configurations).
     original_file = next((p for p in graph_files if 'original' in p.name), None)
     if original_file is None and graph_files:
         original_file = graph_files[0]
@@ -1048,7 +635,7 @@ def analyze_graphs(graph_files: List[Path], dem_src, output_csv: Path, city: str
 
     with open(original_file, 'rb') as f:
         G_original = pickle.load(f)
-    cell_map = map_cells_to_nodes(G_original, cells_df)
+    od_node_samples = sample_od_nodes(G_original, cells_df, od_samples, od_seed)
     del G_original
     gc.collect()
 
@@ -1063,20 +650,28 @@ def analyze_graphs(graph_files: List[Path], dem_src, output_csv: Path, city: str
             continue
 
         variant_type, parameter = parse_filename(filename)
+        dem = GeoDEM(dem_file, graph_bounds(G)) if elevation_source == 'dem' else None
         evaluator = ODWorkEvaluator(
             G,
-            dem_src,
+            dem,
             ds=DS,
             keep_segments=save_segments,
             elevation_source=elevation_source,
         )
-        
-        length_results = evaluator.compute_total_lengths_2d_and_3d_dijkstra(
-            cell_map,
+
+        per_sample = evaluator.compute_total_lengths_2d_and_3d_dijkstra(
+            od_node_samples,
             od_work,
             od_hol,
         )
-        
+        # Spread of the total energy across O/D realisations (sampling uncertainty)
+        e2d_samples = (M_PHYS_KG * G_PHYS * per_sample["vertical_gain_on_2d_path"]
+                       + horizontal_cost_weight * per_sample["path_length_2d_on_2d_path"])
+        e3d_samples = (M_PHYS_KG * G_PHYS * per_sample["vertical_gain_on_3d_path"]
+                       + horizontal_cost_weight * per_sample["path_length_3d_on_3d_path"])
+        ddof = 1 if len(od_node_samples) > 1 else 0
+        length_results = {k: float(v.mean()) for k, v in per_sample.items()}
+
         
         if DEBUG_LENGTHS:
             print("\n[DEBUG] OD-weighted path diagnostics")
@@ -1148,6 +743,18 @@ def analyze_graphs(graph_files: List[Path], dem_src, output_csv: Path, city: str
             "total_energy_2d_J": total_energy_2dpath_J,
             "total_energy_3d_J": total_energy_3dpath_J,
 
+            # O/D sampling: mean over realisations above, spread here
+            "total_energy_on_2d_path_J_sd": float(e2d_samples.std(ddof=ddof)),
+            "total_energy_on_3d_path_J_sd": float(e3d_samples.std(ddof=ddof)),
+            "od_samples": len(od_node_samples),
+            "od_seed": od_seed,
+
+            # Model parameters (needed to re-weight the components a posteriori)
+            "mass_kg": M_PHYS_KG,
+            "horizontal_cost_weight_J_per_m": horizontal_cost_weight,
+            "elevation_source": elevation_source,
+            "method_version": METHOD_VERSION,
+
             # Graph metadata
             "num_nodes": G.number_of_nodes(),
             "num_edges": G.number_of_edges(),
@@ -1194,6 +801,7 @@ def analyze_graphs(graph_files: List[Path], dem_src, output_csv: Path, city: str
 
         # Explicit memory cleanup between variants (important for large city graphs).
         del evaluator
+        del dem
         del G
         if idx % max(1, int(gc_every)) == 0:
             gc.collect()
@@ -1443,9 +1051,11 @@ def print_summary(df: pd.DataFrame):
 
 def main(cities: List[str], resume: bool = False, save_segments: bool = False, low_memory: bool = False,
          horizontal_cost_weight: float = HORIZONTAL_COST_WEIGHT,
-         elevation_source: str = 'node',
+         elevation_source: str = 'dem',
          data_root: Path = DEFAULT_DATA_ROOT,
-         polygon_source: str = 'fua'):
+         polygon_source: str = 'fua',
+         od_samples: int = OD_SAMPLES,
+         od_seed: int = OD_SEED):
     """Main execution for one or multiple cities."""
     if not cities:
         print("Error: No cities specified")
@@ -1475,8 +1085,6 @@ def main(cities: List[str], resume: bool = False, save_segments: bool = False, l
         print(f"\nGraphs directory: {graphs_dir}")
         print(f"Output directory: {output_dir}")
         
-        dem_src = load_dem_reader(dem_file)
-        
         # List graph files and stream them one by one to keep RAM bounded.
         graph_files = list_graph_files(graphs_dir)
         
@@ -1488,7 +1096,7 @@ def main(cities: List[str], resume: bool = False, save_segments: bool = False, l
         
         df = analyze_graphs(
             graph_files,
-            dem_src,
+            dem_file,
             output_csv=output_csv,
             city=city,
             resume=resume,
@@ -1496,8 +1104,11 @@ def main(cities: List[str], resume: bool = False, save_segments: bool = False, l
             gc_every=1 if low_memory else 5,
             horizontal_cost_weight=horizontal_cost_weight,
             elevation_source=elevation_source,
+            data_root=data_root,
+            od_samples=od_samples,
+            od_seed=od_seed,
         )
-        
+
         if 'filename' in df.columns:
             df = df.drop_duplicates(subset=['filename'], keep='last')
         print(f"\nResults up to date: {output_csv}")
@@ -1505,9 +1116,6 @@ def main(cities: List[str], resume: bool = False, save_segments: bool = False, l
         print_summary(df)
 
         plot_work_vs_parameter(df, output_dir)
-
-        if dem_src is not None:
-            dem_src.close()
 
         print("Completed for " + city)
 
@@ -1525,8 +1133,13 @@ if __name__ == '__main__':
                         help='Force extra memory cleanup between graphs')
     parser.add_argument('--horizontal-cost-weight', type=float, default=HORIZONTAL_COST_WEIGHT,
                         help=f'Weight for horizontal travel cost in the composite score (default: lambda_mean={HORIZONTAL_COST_WEIGHT:.1f} J/m)')
-    parser.add_argument('--elevation-source', choices=['node', 'dem'], default='node',
-                        help='Source for vertical work on each edge: node (use z already assigned in step-1) or dem (sample raster along edge geometry)')
+    parser.add_argument('--elevation-source', choices=['node', 'dem'], default='dem',
+                        help='Elevation along each edge: dem (bilinear DEM sample every DS m, default) '
+                             'or node (legacy: linear between step-1 node elevations)')
+    parser.add_argument('--od-samples', type=int, default=OD_SAMPLES,
+                        help=f'Number of O/D point realisations per cell (default: {OD_SAMPLES})')
+    parser.add_argument('--od-seed', type=int, default=OD_SEED,
+                        help=f'Seed for the O/D point sampling (default: {OD_SEED})')
     parser.add_argument('--data-root', type=Path, default=DEFAULT_DATA_ROOT,
                         help=f'Root directory containing the city folders (default: {DEFAULT_DATA_ROOT})')
     parser.add_argument('--polygon-source', type=str, choices=['fua', 'osm'], default='fua',
@@ -1545,4 +1158,6 @@ if __name__ == '__main__':
         elevation_source=cli_args.elevation_source,
         data_root=cli_args.data_root,
         polygon_source=cli_args.polygon_source,
+        od_samples=cli_args.od_samples,
+        od_seed=cli_args.od_seed,
     )

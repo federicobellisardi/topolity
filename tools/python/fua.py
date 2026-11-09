@@ -21,7 +21,8 @@ import numpy as np
 from pyproj import Transformer
 from typing import Optional, Tuple
 
-log_dir = '/home/fbellisardi/code/topolity/logs'
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # repository root
+log_dir = os.path.join(REPO, 'logs')
 os.makedirs(log_dir, exist_ok=True)
 
 logging.basicConfig(
@@ -287,9 +288,9 @@ def main():
     
     parser.add_argument('city_name',help='Name of the city to process (e.g., "Barcelona", "Madrid")')
     
-    parser.add_argument('--gpkg', '--gpkg-file', default="/home/fbellisardi/code/topolity/vars/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg", help='Path to the GeoPackage file (default: %(default)s)')
+    parser.add_argument('--gpkg', '--gpkg-file', default=os.path.join(REPO, "vars", "GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0", "GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg"), help='Path to the GeoPackage file (default: %(default)s)')
     
-    parser.add_argument('--output', '--output-dir', default="/home/fbellisardi/code/topolity/output/bbox",help='Output directory for generated maps (default: %(default)s)')
+    parser.add_argument('--output', '--output-dir', default=os.path.join(REPO, "output", "bbox"),help='Output directory for generated maps (default: %(default)s)')
     
     parser.add_argument('--log-level',choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],default='INFO',help='Set the logging level (default: %(default)s)')
     

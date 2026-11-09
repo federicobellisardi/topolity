@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import pickle
 from pathlib import Path
@@ -20,14 +21,21 @@ from shapely.geometry import LineString
 
 
 
-BASE_DIR = Path("/home/fbellisardi/code/topolity/data/data_processed")
+ROOT = Path(__file__).resolve().parents[1]
+BASE_DIR = ROOT / "data" / "data_processed"
 CSV_RELATIVE_PATH = Path("graphs_fine_grid/fine_grid_gravitational_work.csv")
 
-OUTPUT_DIR = Path("/home/fbellisardi/code/topolity/output/lower_energy_analysis")
+OUTPUT_DIR = ROOT / "output" / "lower_energy_analysis"
 BOXPLOT_DIR = OUTPUT_DIR / "boxplots"
 NETWORK_PANEL_DIR = OUTPUT_DIR / "network_panels"
 
 ENERGY_COL = "total_energy_on_3d_path_J"
+# Same main ensemble and tie rule as the SI classification (python/vehicle_ratio_sweep.py):
+# contractions and translations < 200 m are excluded, and a variant counts as lower only if it is
+# more than TIE_TOL (0.05 %) below the observed embedding.
+import sys  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from vehicle_ratio_sweep import TIE_TOL, main_ensemble_mask  # noqa: E402
 
 SAVE = True
 SHOW = False
@@ -67,6 +75,17 @@ HIGHWAY_PRIORITY = {
 }
 
 
+
+
+def carto_positron_source() -> str:
+    """CARTO Positron tiles with the project API key (conf/conf.json); without a key the tiles are watermarked."""
+    url = "https://basemaps.cartocdn.com/rastertiles/light_all/{z}/{x}/{y}.png"
+    try:
+        key = json.loads((ROOT / "conf" / "conf.json").read_text())["api_keys"]["carto"]
+    except (FileNotFoundError, KeyError, json.JSONDecodeError):
+        print("[basemap] CARTO API key not found in conf/conf.json; tiles will be watermarked.")
+        return url
+    return f"{url}?key={key}"
 
 
 def classify_transformation_type(value) -> str:
@@ -219,7 +238,8 @@ def prepare_city_dataframe(csv_path: Path, city: str) -> tuple[pd.DataFrame | No
         return df, None, f"missing_column: {ENERGY_COL}"
 
     df[ENERGY_COL] = pd.to_numeric(df[ENERGY_COL], errors="coerce")
-    df = df.dropna(subset=[ENERGY_COL]).copy()
+    df = df.dropna(subset=[ENERGY_COL]).drop_duplicates("filename", keep="last")
+    df = df[main_ensemble_mask(df["filename"])].copy()
 
     original = df[df["filename"].astype(str).eq("graph_original.pkl")]
 
@@ -235,7 +255,7 @@ def prepare_city_dataframe(csv_path: Path, city: str) -> tuple[pd.DataFrame | No
     df["delta_energy_pct"] = 100 * df["delta_energy"] / original_energy
     df["is_lower_energy"] = (
         (df["filename"].astype(str) != "graph_original.pkl")
-        & (df["energy_plot"] < original_energy)
+        & (df["energy_plot"] < (1 - TIE_TOL) * original_energy)
     )
 
     type_source = df["variant_type"] if "variant_type" in df.columns else df["filename"]
@@ -395,7 +415,8 @@ def plot_city_network_panels(
 
         ctx.add_basemap(
             ax,
-            source=ctx.providers.CartoDB.Positron,
+            source=carto_positron_source(),
+            attribution="(C) OpenStreetMap contributors (C) CARTO",
             attribution_size=3,
             reset_extent=False,
         )
@@ -447,9 +468,10 @@ def main() -> None:
     error_rows = []
     panel_summary_rows = []
 
-    for csv_path in sorted(BASE_DIR.glob(f"*/{CSV_RELATIVE_PATH}")):
-        city = csv_path.parts[-3]
-        fine_dir = csv_path.parent
+    from study_config import step2_table, study_cities
+    for city in study_cities():
+        csv_path = step2_table(city)                # 3DEP table for study_config.ALT_DEM_CITIES
+        fine_dir = BASE_DIR / city / CSV_RELATIVE_PATH.parent   # graphs always come from step 1
         city_dir = BASE_DIR / city
 
         df, original_energy, status = prepare_city_dataframe(csv_path, city)

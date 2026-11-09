@@ -1,8 +1,23 @@
-osmnx
-networkx
-pandas
-geopandas
-shapely
-matplotlib
-folium
-scipy
+# Versions of the environment used for the round-2 revision results
+# (Python 3.13.2). Direct dependencies only; the full lock is requirements-lock.txt (see environment.yml).
+contextily==1.7.1
+geopandas==1.2.0
+matplotlib==3.11.2
+networkit==11.1.post1
+networkx==3.4.2
+numpy==2.5.4
+osmnx==2.0.1
+pandas==3.1.0
+psutil==7.2.2
+pyarrow==23.0.1
+pyogrio==0.13.0
+pyproj==3.8.0
+pytest==9.1.1
+rasterio==1.5.2
+requests==2.32.3
+scipy==1.18.1
+seaborn==0.13.2
+shapely==2.2.0
+tqdm==4.67.1
+xyzservices==2026.9.1
+# Optional, notebooks/visualize_graph.ipynb only: folium==0.20.0
