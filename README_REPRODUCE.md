@@ -107,6 +107,7 @@ cache of a city only if its graphs change.
 | Result | Command | Output |
 |---|---|---|
 | Fig. 7 (car), candidate cells, gravity-model fit | `python python/multi_city_settlement.py` (city `barcelone`) | `output/terrain_aware_densification/barcelone/` |
+| Fig. 7 (paper file, redrawn from the saved selection) | `python python/fig7_main.py` | `paper_v2/images/fig7.{pdf,png}` |
 | Fixed-criteria reselection check | `python python/densification_reselect.py` | see script header |
 | Transformations by mode, per embedding (cluster, one task per embedding) | `pipeline_production/submit_transform_multimodal.sh` (`CITY=barcelone` or `madrid`) | `output/transform_multimodal/<city>/sums/*.json` |
 | Transformations by mode, merge and worst case (seconds) | `python python/barcelona_transform_multimodal.py --city <city> --merge` | `output/transform_multimodal/<city>/observed_minimum_by_mode.csv` |

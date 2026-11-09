@@ -817,6 +817,19 @@ def make_city_plots(city, cells, selected_df, output_dir: Path):
 
 
 
+def basemap_zoom(ax, min_dpi: float = 450.0) -> int:
+    """Web-tile zoom level giving at least ``min_dpi`` across the axes at print size.
+
+    contextily picks the zoom from the extent alone, which for a single-column
+    panel gives tiles of about 100 dpi.  Extent in EPSG:3857 metres.
+    """
+    x0, x1 = ax.get_xlim()
+    width_in = ax.get_position().width * ax.figure.get_size_inches()[0]
+    target_px = min_dpi * width_in
+    metres_per_px = abs(x1 - x0) / target_px
+    return int(min(18, np.ceil(np.log2(156543.034 / metres_per_px))))
+
+
 def make_combined_figure(city, cells, selected_df, output_dir: Path):
     """Paper Fig. 7: (a) map of the selected cells, (b) energy components,
     stacked vertically at single-column width."""
@@ -861,7 +874,7 @@ def make_combined_figure(city, cells, selected_df, output_dir: Path):
     ax_map.set_aspect("equal", adjustable="box")
     try:
         ctx.add_basemap(ax_map, crs="EPSG:3857", source=MAP_BASEMAP_PROVIDER,
-                        attribution=False, zorder=1)
+                        zoom=basemap_zoom(ax_map), attribution=False, zorder=1)
     except Exception as e:
         print(f"[{city}] Could not add basemap: {e}")
 
@@ -898,8 +911,13 @@ def make_combined_figure(city, cells, selected_df, output_dir: Path):
         fontsize=6, frameon=True,
     )
 
+    for ax, letter in ((ax_map, "a"), (ax_bar, "b")):
+        pos = ax.get_position()
+        fig.text(0.0, pos.y1 + 0.005, letter, ha="left", va="bottom",
+                 fontsize=14, weight="bold")
+
     for ext in ("pdf", "png"):
-        fig.savefig(output_dir / f"{city}_fig7_densification.{ext}", dpi=300, bbox_inches="tight")
+        fig.savefig(output_dir / f"{city}_fig7_densification.{ext}", dpi=600, bbox_inches="tight")
     plt.close(fig)
 
 
