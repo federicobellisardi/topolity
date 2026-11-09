@@ -129,7 +129,7 @@ scripts; the per-embedding sums do not need to be recomputed.
 |---|---|
 | SI energy profiles (`figures/supporting_profiles/`), counterexample maps (`figures/counterexamples/`), `land_false_counts`, overview figure (`figures/overview/`) | `python supplementary/python/build_gravitational_supplementary.py` (`--only supporting|counterexamples`, `--cities ...`, `--output-root <dir>`; default output `figures/supplementary/`). Rerun with the final classification and copy the figures to `paper_v2/supp_images/figures/`. |
 | Fig. 1 (concept) | does not depend on the corrected pipeline |
-| Fig. 3 (Lorenz curves, Barcelona work map) | depends on the corrected pipeline; generating script not in the repository |
+| Fig. 3 (Lorenz curves, Barcelona work map) | `python python/fig3_main.py` (writes `paper_v2/images/fig3_regenerated.{pdf,png}`; `--out paper_v2/images/fig3` to replace the paper file). Input: per-segment work `data/data_processed/<city>/graphs/arc_work_segments_original.csv` of the first-round pipeline; the current `--save-segments` export lacks the flow-weighted work |
 | `supp_osm_comparison`, DEM-validation scatter plots | round-1 figures, unchanged; generating script not identified |
 
 ## Known limitations
