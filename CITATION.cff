@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: "If you use this code, please cite the paper below."
+title: "Topolity: code for 'Mobility energetic balance frames spatial configuration of cities'"
+authors:
+  - family-names: Bellisardi
+    given-names: Federico
+    orcid: "https://orcid.org/0009-0002-4282-457X"
+license: MIT
+repository-code: "https://github.com/federicobellisardi/topolity"
+preferred-citation:
+  type: article
+  title: "Mobility energetic balance frames spatial configuration of cities"
+  authors:
+    - family-names: Bellisardi
+      given-names: Federico
+    - family-names: Cano-Suñén
+      given-names: Enrique
+    - family-names: Ruiz-Varona
+      given-names: Ana
+    - family-names: Ramasco
+      given-names: José J.
+  year: 2026
+  identifiers:
+    - type: other
+      value: "arXiv:2610.21558"
